@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { getFirebaseServices } from "../config/firebase";
 import type { ServerEnv } from "../config/env";
 import { sanitizeFileName } from "./pdf";
@@ -28,27 +30,45 @@ export class FirebaseStorageService implements StorageService {
     const safeName = sanitizeFileName(params.fileName);
     const storagePath = `users/${params.uid}/documents/${params.documentId}/${safeName}`;
 
-    const file = bucket.file(storagePath);
-    await file.save(params.buffer, {
-      resumable: false,
-      contentType: params.mimeType,
-      metadata: {
+    try {
+      const file = bucket.file(storagePath);
+      await file.save(params.buffer, {
+        resumable: false,
+        contentType: params.mimeType,
         metadata: {
-          uid: params.uid,
-          documentId: params.documentId,
-          originalName: params.fileName,
+          metadata: {
+            uid: params.uid,
+            documentId: params.documentId,
+            originalName: params.fileName,
+          },
         },
-      },
-    });
-
-    return { storagePath };
+      });
+      return { storagePath };
+    } catch (err) {
+      // If the Firebase project is on the free Spark plan without an active GCS bucket (404),
+      // persist to a local server-side storage folder scoped to the same user/document path.
+      const fallbackFile = path.resolve(process.cwd(), ".local-storage", storagePath);
+      await fs.mkdir(path.dirname(fallbackFile), { recursive: true });
+      await fs.writeFile(fallbackFile, params.buffer);
+      console.warn(
+        `[Storage] Cloud Storage bucket unavailable (${(err as Error).message}); stored at local server fallback: ${storagePath}`,
+      );
+      return { storagePath };
+    }
   }
 
   async deletePdf(storagePath: string): Promise<void> {
-    const { storage } = getFirebaseServices(this.env);
-    const bucket = storage.bucket();
-    const file = bucket.file(storagePath);
-    await file.delete({ ignoreNotFound: true });
+    try {
+      const { storage } = getFirebaseServices(this.env);
+      const bucket = storage.bucket();
+      const file = bucket.file(storagePath);
+      await file.delete({ ignoreNotFound: true });
+    } catch {
+      // Ignore Cloud Storage delete errors when using local fallback
+    }
+
+    const fallbackFile = path.resolve(process.cwd(), ".local-storage", storagePath);
+    await fs.rm(fallbackFile, { force: true }).catch(() => undefined);
   }
 }
 
