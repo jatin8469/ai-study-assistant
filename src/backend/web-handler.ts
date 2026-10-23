@@ -17,6 +17,7 @@ import {
   formatBytes,
   validatePdfUpload,
 } from "./services/pdf";
+import { buildStarterDocumentsForUser } from "./services/seed-docs";
 import {
   FirestoreStudyRepository,
   type StudyRepository,
@@ -236,6 +237,25 @@ export async function handleWebApiRequest(request: Request): Promise<Response> {
       const docs = await repository.listDocumentsByUid(uid);
       return jsonResponse(200, {
         documents: docs.filter((d) => d.uid === uid).map((d) => toDocumentSummary(d)),
+      });
+    }
+
+    // POST /api/documents/seed
+    if (pathname === "/api/documents/seed" && method === "POST") {
+      const existing = await repository.listDocumentsByUid(uid);
+      if (existing.length > 0) {
+        return jsonResponse(200, {
+          seeded: false,
+          documents: existing.map((d) => toDocumentSummary(d)),
+        });
+      }
+      const starterDocs = buildStarterDocumentsForUser(uid);
+      for (const doc of starterDocs) {
+        await repository.createDocument(doc);
+      }
+      return jsonResponse(201, {
+        seeded: true,
+        documents: starterDocs.map((d) => toDocumentSummary(d)),
       });
     }
 

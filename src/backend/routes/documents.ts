@@ -9,6 +9,7 @@ import {
   validatePdfUpload,
   type PdfExtractor,
 } from "../services/pdf";
+import { buildStarterDocumentsForUser } from "../services/seed-docs";
 import type { StudyRepository } from "../services/repository";
 import type { StorageService } from "../services/storage";
 import type { DocumentRecord, DocumentSummary } from "../types";
@@ -63,6 +64,31 @@ export function createDocumentsRouter(deps: DocumentsRouterDeps): Router {
         .filter((d) => d.uid === uid)
         .map((d) => toDocumentSummary(d));
       res.status(200).json({ documents: summaries });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // POST /api/documents/seed — populate starter study documents for the authenticated user
+  router.post("/seed", async (req, res, next) => {
+    try {
+      const uid = getAuthenticatedUid(req);
+      const existing = await deps.repository.listDocumentsByUid(uid);
+      if (existing.length > 0) {
+        res.status(200).json({
+          seeded: false,
+          documents: existing.map((d) => toDocumentSummary(d)),
+        });
+        return;
+      }
+      const starterDocs = buildStarterDocumentsForUser(uid);
+      for (const doc of starterDocs) {
+        await deps.repository.createDocument(doc);
+      }
+      res.status(201).json({
+        seeded: true,
+        documents: starterDocs.map((d) => toDocumentSummary(d)),
+      });
     } catch (err) {
       next(err);
     }
