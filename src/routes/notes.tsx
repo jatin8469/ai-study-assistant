@@ -1,12 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Copy, Download, NotebookPen, Sparkles, AlertTriangle } from "lucide-react";
 import { AppShell, DemoNote, EmptyState, SectionCard } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { documents } from "@/lib/sample-data";
+import { apiRequest } from "@/lib/firebase-client";
+import { useStudyDocuments } from "@/lib/study-api";
 
 export const Route = createFileRoute("/notes")({
   head: () => ({
@@ -26,26 +28,155 @@ const types = [
   { id: "definitions", label: "Key definitions", desc: "Terms & meanings" },
   { id: "simple", label: "Simple explanation", desc: "Beginner friendly" },
   { id: "revision", label: "Revision notes", desc: "Last-minute bullets" },
-];
+] as const;
 
-const sample = {
+type NoteOutput = {
+  title: string;
+  sections: { heading: string; bullets: string[] }[];
+  sourceRange: string;
+};
+
+const sample: NoteOutput = {
   title: "CPU Scheduling — Summary",
   sections: [
-    { h: "Overview", body: ["CPU scheduling decides which ready process runs next to maximise CPU utilisation and minimise waiting time."] },
-    { h: "Key algorithms", body: ["FCFS — simple, non-preemptive, can cause convoy effect.", "SJF — optimal average waiting time, risk of starvation.", "Priority — may starve low priority; solved with aging.", "Round Robin — time quantum based, good response time."] },
-    { h: "Criteria", body: ["CPU utilisation, throughput, turnaround time, waiting time, response time."] },
+    {
+      heading: "Overview",
+      bullets: [
+        "CPU scheduling decides which ready process runs next to maximise CPU utilisation and minimise waiting time.",
+      ],
+    },
+    {
+      heading: "Key algorithms",
+      bullets: [
+        "FCFS — simple, non-preemptive, can cause convoy effect.",
+        "SJF — optimal average waiting time, risk of starvation.",
+        "Priority — may starve low priority; solved with aging.",
+        "Round Robin — time quantum based, good response time.",
+      ],
+    },
+    {
+      heading: "Criteria",
+      bullets: ["CPU utilisation, throughput, turnaround time, waiting time, response time."],
+    },
   ],
-  source: "Operating Systems — Galvin, pp. 138–152",
+  sourceRange: "Operating Systems — Galvin, pp. 1–4",
 };
 
 function Notes() {
-  const [doc, setDoc] = useState("d1");
-  const [type, setType] = useState("summary");
+  const { docs } = useStudyDocuments();
+  const [doc, setDoc] = useState("");
+  const [type, setType] = useState<(typeof types)[number]["id"]>("summary");
+  const [topic, setTopic] = useState("");
   const [state, setState] = useState<"idle" | "loading" | "done" | "error">("done");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [note, setNote] = useState<NoteOutput>(sample);
 
-  const generate = () => {
+  useEffect(() => {
+    if (!doc && docs[0]) {
+      setDoc(docs[0].id);
+    }
+  }, [doc, docs]);
+
+  const generate = async () => {
+    const selectedDoc = docs.find((d) => d.id === doc) ?? docs[0];
+    if (!selectedDoc) {
+      toast.error("Please upload or select a document first.");
+      return;
+    }
+    if (selectedDoc.status === "failed") {
+      setErrorMessage(
+        "This document failed processing, so there's no text to work with. Re-upload a clearer PDF from My Library.",
+      );
+      setState("error");
+      return;
+    }
+
     setState("loading");
-    setTimeout(() => setState(doc === "d6" ? "error" : "done"), 1400);
+    setErrorMessage("");
+    try {
+      if (type === "simple" && topic.trim().length >= 2) {
+        const res = await apiRequest<{
+          title: string;
+          explanation: string;
+          analogy: string;
+          keyTakeaways: string[];
+          sourceRange: string;
+        }>("/api/ai/explain", {
+          method: "POST",
+          body: JSON.stringify({
+            documentId: selectedDoc.id,
+            topic: topic.trim(),
+          }),
+        });
+        setNote({
+          title: res.title,
+          sections: [
+            { heading: "Simple Explanation", bullets: [res.explanation] },
+            { heading: "Real-world Analogy", bullets: [res.analogy] },
+            { heading: "Key Takeaways", bullets: res.keyTakeaways },
+          ],
+          sourceRange: `${selectedDoc.title} · ${res.sourceRange}`,
+        });
+      } else {
+        const res = await apiRequest<{
+          title: string;
+          sections: { heading: string; bullets: string[] }[];
+          sourceRange: string;
+        }>("/api/ai/summarize", {
+          method: "POST",
+          body: JSON.stringify({
+            documentId: selectedDoc.id,
+            noteType: type,
+          }),
+        });
+        setNote({
+          title: res.title,
+          sections: res.sections,
+          sourceRange: `${selectedDoc.title} · ${res.sourceRange}`,
+        });
+      }
+      setState("done");
+      toast.success("Notes generated & saved to Study History");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Could not generate notes right now.";
+      setErrorMessage(msg);
+      setState("error");
+      toast.error("Failed to generate notes", { description: msg });
+    }
+  };
+
+  const formatMarkdown = () => {
+    const lines = [`# ${note.title}`, ""];
+    for (const s of note.sections) {
+      lines.push(`## ${s.heading}`);
+      for (const b of s.bullets) {
+        lines.push(`- ${b}`);
+      }
+      lines.push("");
+    }
+    lines.push(`_Source: ${note.sourceRange}_`);
+    return lines.join("\n");
+  };
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(formatMarkdown());
+      toast.success("Copied notes to clipboard");
+    } catch {
+      toast.error("Could not copy to clipboard");
+    }
+  };
+
+  const handleDownload = () => {
+    const md = formatMarkdown();
+    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${note.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Downloaded Markdown notes");
   };
 
   return (
@@ -53,30 +184,69 @@ function Notes() {
       <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
         <SectionCard title="Generate notes" description="Pick a document and note style">
           <label className="text-xs font-medium text-muted-foreground">Document</label>
-          <Select value={doc} onValueChange={setDoc}>
-            <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
-            <SelectContent>{documents.map((d) => <SelectItem key={d.id} value={d.id}>{d.title}</SelectItem>)}</SelectContent>
+          <Select value={doc || (docs[0]?.id ?? "")} onValueChange={setDoc}>
+            <SelectTrigger className="mt-1.5">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {docs.map((d) => (
+                <SelectItem key={d.id} value={d.id}>
+                  {d.title}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
           <p className="mt-4 text-xs font-medium text-muted-foreground">Note type</p>
           <div className="mt-1.5 space-y-1.5">
             {types.map((t) => (
-              <button key={t.id} onClick={() => setType(t.id)} className={`w-full rounded-lg border px-3 py-2 text-left transition ${type === t.id ? "border-primary bg-primary-soft" : "hover:bg-muted"}`}>
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setType(t.id)}
+                className={`w-full rounded-lg border px-3 py-2 text-left transition ${
+                  type === t.id ? "border-primary bg-primary-soft" : "hover:bg-muted"
+                }`}
+              >
                 <p className={`text-sm font-medium ${type === t.id ? "text-primary" : ""}`}>{t.label}</p>
                 <p className="text-xs text-muted-foreground">{t.desc}</p>
               </button>
             ))}
           </div>
-          <Button className="mt-4 w-full" onClick={generate} disabled={state === "loading"}>
-            <Sparkles className="mr-1.5 h-4 w-4" />{state === "loading" ? "Generating…" : "Generate notes"}
+          {type === "simple" && (
+            <div className="mt-3">
+              <label className="text-xs font-medium text-muted-foreground">
+                Specific concept or topic (optional)
+              </label>
+              <Input
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                placeholder="e.g. Deadlock prevention, BCNF, TCP 3-way handshake"
+                className="mt-1.5"
+              />
+            </div>
+          )}
+          <Button className="mt-4 w-full" onClick={() => void generate()} disabled={state === "loading"}>
+            <Sparkles className="mr-1.5 h-4 w-4" />
+            {state === "loading" ? "Generating with Gemini…" : "Generate notes"}
           </Button>
         </SectionCard>
 
         <div>
-          {state === "idle" && <EmptyState icon={NotebookPen} title="No notes yet" description="Choose a document and a note type, then generate." />}
+          {state === "idle" && (
+            <EmptyState
+              icon={NotebookPen}
+              title="No notes yet"
+              description="Choose a document and a note type, then generate."
+            />
+          )}
           {state === "loading" && (
             <SectionCard>
               <Skeleton className="h-6 w-1/2" />
-              <div className="mt-6 space-y-3">{Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-4" style={{ width: `${60 + ((i * 17) % 40)}%` }} />)}</div>
+              <div className="mt-6 space-y-3">
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <Skeleton key={i} className="h-4" style={{ width: `${60 + ((i * 17) % 40)}%` }} />
+                ))}
+              </div>
             </SectionCard>
           )}
           {state === "error" && (
@@ -84,32 +254,52 @@ function Notes() {
               <AlertTriangle className="mt-0.5 h-5 w-5 text-destructive" />
               <div>
                 <p className="font-semibold">Couldn't generate notes</p>
-                <p className="mt-1 text-sm text-muted-foreground">This document failed processing, so there's no text to work with. Re-upload a clearer PDF from My Library.</p>
-                <Button size="sm" variant="outline" className="mt-3" onClick={() => setDoc("d1")}>Choose another document</Button>
+                <p className="mt-1 text-sm text-muted-foreground">{errorMessage}</p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-3"
+                  onClick={() => {
+                    const ready = docs.find((d) => d.status === "ready");
+                    if (ready) setDoc(ready.id);
+                    setState("done");
+                  }}
+                >
+                  Choose another document
+                </Button>
               </div>
             </div>
           )}
           {state === "done" && (
             <SectionCard
-              title={sample.title}
-              description={`Sample output · ${types.find((t) => t.id === type)?.label}`}
+              title={note.title}
+              description={`${types.find((t) => t.id === type)?.label ?? "Notes"}`}
               action={
                 <div className="flex gap-1">
-                  <Button variant="ghost" size="icon" aria-label="Copy notes" onClick={() => toast.success("Copied to clipboard")}><Copy className="h-4 w-4" /></Button>
-                  <Button variant="ghost" size="icon" aria-label="Download notes" onClick={() => toast.info("Export will be available after backend setup")}><Download className="h-4 w-4" /></Button>
+                  <Button variant="ghost" size="icon" aria-label="Copy notes" onClick={() => void handleCopy()}>
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon" aria-label="Download notes" onClick={handleDownload}>
+                    <Download className="h-4 w-4" />
+                  </Button>
                 </div>
               }
             >
               <div className="space-y-5">
-                {sample.sections.map((s) => (
-                  <div key={s.h}>
-                    <h3 className="text-sm font-semibold text-primary">{s.h}</h3>
+                {note.sections.map((s) => (
+                  <div key={s.heading}>
+                    <h3 className="text-sm font-semibold text-primary">{s.heading}</h3>
                     <ul className="mt-2 space-y-1.5 text-sm leading-relaxed">
-                      {s.body.map((b) => <li key={b} className="flex gap-2"><span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/50" />{b}</li>)}
+                      {s.bullets.map((b) => (
+                        <li key={b} className="flex gap-2">
+                          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary/50" />
+                          <span>{b}</span>
+                        </li>
+                      ))}
                     </ul>
                   </div>
                 ))}
-                <p className="border-t pt-3 text-xs text-muted-foreground">Source: {sample.source}</p>
+                <p className="border-t pt-3 text-xs text-muted-foreground">Source: {note.sourceRange}</p>
               </div>
             </SectionCard>
           )}

@@ -1,12 +1,14 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Plus, Send, Sparkles, BookOpen, FileText, Paperclip } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
-import { conversations, documents } from "@/lib/sample-data";
+import { apiRequest } from "@/lib/firebase-client";
+import { formatRelativeTime, useStudyDocuments, type ApiHistoryItem } from "@/lib/study-api";
 
 export const Route = createFileRoute("/tutor")({
   head: () => ({
@@ -27,85 +29,282 @@ const initial: Msg[] = [
   {
     role: "ai",
     text: "Round Robin (RR) gives every process a fixed time slice called the time quantum. Processes wait in a circular ready queue; when a process's quantum expires it is pre-empted and moved to the back.\n\nExample with quantum = 4 ms: P1 (10 ms), P2 (4 ms), P3 (6 ms). Order: P1 → P2 → P3 → P1 → P3 → P1. P2 finishes at 8 ms, P3 at 18 ms, P1 at 20 ms.\n\nA smaller quantum improves response time but increases context-switch overhead.",
-    sources: ["Galvin p. 146", "Galvin p. 147"],
+    sources: ["Page 2", "Page 3"],
   },
 ];
 
-const suggestions = ["Compare SJF and Priority scheduling", "What is a context switch?", "Give me 3 exam questions on this", "Explain like I'm new to OS"];
+const suggestions = [
+  "Compare SJF and Priority scheduling",
+  "What are the four Coffman deadlock conditions?",
+  "Compare TCP and UDP transport protocols",
+  "Explain 2NF, 3NF, and BCNF normalization",
+];
 
-function ConversationList() {
+function ConversationList({
+  items,
+  activeId,
+  onSelect,
+  onNewChat,
+}: {
+  items: ApiHistoryItem[];
+  activeId: string | null;
+  onSelect: (item: ApiHistoryItem) => void;
+  onNewChat: () => void;
+}) {
   return (
     <div className="flex h-full flex-col">
-      <Button className="m-3"><Plus className="mr-1.5 h-4 w-4" />New chat</Button>
+      <Button className="m-3" onClick={onNewChat}>
+        <Plus className="mr-1.5 h-4 w-4" />New chat
+      </Button>
       <p className="px-4 pb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Recent</p>
       <ul className="flex-1 space-y-1 overflow-y-auto px-2">
-        {conversations.map((c, i) => (
-          <li key={c.id}>
-            <button className={`w-full rounded-lg px-3 py-2 text-left ${i === 0 ? "bg-primary-soft" : "hover:bg-muted"}`}>
-              <p className={`truncate text-sm font-medium ${i === 0 ? "text-primary" : ""}`}>{c.title}</p>
-              <p className="truncate text-xs text-muted-foreground">{c.time} · {c.doc}</p>
-            </button>
+        {items.length === 0 ? (
+          <li className="px-3 py-4 text-xs text-muted-foreground">
+            Your saved AI Tutor questions will appear here.
           </li>
-        ))}
+        ) : (
+          items.map((c) => {
+            const isActive = activeId === c.id;
+            return (
+              <li key={c.id}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(c)}
+                  className={`w-full rounded-lg px-3 py-2 text-left ${isActive ? "bg-primary-soft" : "hover:bg-muted"}`}
+                >
+                  <p className={`truncate text-sm font-medium ${isActive ? "text-primary" : ""}`}>{c.title}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {formatRelativeTime(c.createdAt)} · {c.documentTitle}
+                  </p>
+                </button>
+              </li>
+            );
+          })
+        )}
       </ul>
     </div>
   );
 }
 
 function Tutor() {
+  const { docs } = useStudyDocuments();
+  const readyDocs = docs.filter((d) => d.status === "ready");
   const [messages, setMessages] = useState<Msg[]>(initial);
   const [input, setInput] = useState("");
-  const [ctx, setCtx] = useState("d1");
-  const send = (text: string) => {
-    if (!text.trim()) return;
-    setMessages((m) => [...m, { role: "user", text }, { role: "ai", text: "", pending: true }]);
-    setInput("");
+  const [ctx, setCtx] = useState<string>("");
+  const [chatHistory, setChatHistory] = useState<ApiHistoryItem[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!ctx && readyDocs[0]) {
+      setCtx(readyDocs[0].id);
+    }
+  }, [ctx, readyDocs]);
+
+  const loadHistory = async () => {
+    try {
+      const res = await apiRequest<{ history: ApiHistoryItem[] }>("/api/history?type=chat");
+      setChatHistory(res.history);
+    } catch {
+      // ignore
+    }
   };
+
+  useEffect(() => {
+    void loadHistory();
+  }, []);
+
+  const targetDocId = ctx && ctx !== "all" ? ctx : readyDocs[0]?.id ?? "seed-os-galvin";
+
+  const send = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || sending) return;
+
+    const priorTurns = messages
+      .filter((m) => !m.pending && m.text.trim().length > 0)
+      .slice(-6)
+      .map((m) => ({
+        role: m.role === "user" ? ("user" as const) : ("model" as const),
+        text: m.text,
+      }));
+
+    setMessages((m) => [...m, { role: "user", text: trimmed }, { role: "ai", text: "", pending: true }]);
+    setInput("");
+    setSending(true);
+
+    try {
+      const res = await apiRequest<{
+        id: string;
+        answer: string;
+        sources: { pageNumber: number; snippet: string }[];
+        supported: boolean;
+      }>("/api/ai/chat", {
+        method: "POST",
+        body: JSON.stringify({
+          documentId: targetDocId,
+          question: trimmed,
+          history: priorTurns,
+        }),
+      });
+
+      const docTitle = readyDocs.find((d) => d.id === targetDocId)?.title ?? "Document";
+      const sourceLabels = (res.sources ?? []).map((s) => `${docTitle.split("—")[0]?.trim() ?? "Doc"} p. ${s.pageNumber}`);
+
+      setMessages((m) => [
+        ...m.slice(0, -1),
+        {
+          role: "ai",
+          text: res.answer,
+          ...(sourceLabels.length > 0 ? { sources: sourceLabels } : {}),
+        },
+      ]);
+      setActiveChatId(res.id);
+      void loadHistory();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Could not get an answer from the AI tutor.";
+      toast.error("AI Tutor error", { description: msg });
+      setMessages((m) => [
+        ...m.slice(0, -1),
+        {
+          role: "ai",
+          text: `Sorry, I couldn't process that question right now: ${msg}`,
+        },
+      ]);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleSelectHistory = async (item: ApiHistoryItem) => {
+    setActiveChatId(item.id);
+    if (item.documentId) setCtx(item.documentId);
+    try {
+      const res = await apiRequest<{
+        history: ApiHistoryItem & {
+          question?: string;
+          answer?: string;
+          sources?: { pageNumber: number; snippet: string }[];
+        };
+      }>(`/api/history/${item.id}`);
+      const h = res.history;
+      if (h.question && h.answer) {
+        const labels = (h.sources ?? []).map((s) => `Page ${s.pageNumber}`);
+        setMessages([
+          { role: "user", text: h.question },
+          { role: "ai", text: h.answer, ...(labels.length > 0 ? { sources: labels } : {}) },
+        ]);
+      }
+    } catch {
+      toast.error("Could not load saved conversation");
+    }
+  };
+
+  const handleNewChat = () => {
+    setActiveChatId(null);
+    setMessages(initial);
+  };
+
+  const selectedDocTitle =
+    ctx === "all"
+      ? "All documents"
+      : readyDocs.find((d) => d.id === ctx)?.title ?? readyDocs[0]?.title ?? "Operating Systems — Galvin";
+
   return (
     <AppShell
       title="AI Tutor"
       actions={
         <Sheet>
-          <SheetTrigger asChild><Button variant="outline" size="sm" className="lg:hidden">Chats</Button></SheetTrigger>
-          <SheetContent side="left" className="w-72 p-0"><SheetTitle className="sr-only">Conversations</SheetTitle><ConversationList /></SheetContent>
+          <SheetTrigger asChild>
+            <Button variant="outline" size="sm" className="lg:hidden">
+              Chats
+            </Button>
+          </SheetTrigger>
+          <SheetContent side="left" className="w-72 p-0">
+            <SheetTitle className="sr-only">Conversations</SheetTitle>
+            <ConversationList
+              items={chatHistory}
+              activeId={activeChatId}
+              onSelect={(item) => void handleSelectHistory(item)}
+              onNewChat={handleNewChat}
+            />
+          </SheetContent>
         </Sheet>
       }
     >
       <div className="grid h-[calc(100vh-7.5rem)] overflow-hidden rounded-xl border bg-card shadow-card lg:grid-cols-[260px_1fr]">
-        <aside className="hidden border-r lg:block"><ConversationList /></aside>
+        <aside className="hidden border-r lg:block">
+          <ConversationList
+            items={chatHistory}
+            activeId={activeChatId}
+            onSelect={(item) => void handleSelectHistory(item)}
+            onNewChat={handleNewChat}
+          />
+        </aside>
         <div className="flex min-h-0 flex-col">
           <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
             <BookOpen className="h-4 w-4 text-muted-foreground" />
             <span className="text-sm text-muted-foreground">Context:</span>
-            <Select value={ctx} onValueChange={setCtx}>
-              <SelectTrigger className="h-8 w-auto max-w-[260px] text-sm"><SelectValue>{ctx === "all" ? "All documents" : documents.find((d) => d.id === ctx)?.title}</SelectValue></SelectTrigger>
+            <Select value={ctx || (readyDocs[0]?.id ?? "all")} onValueChange={setCtx}>
+              <SelectTrigger className="h-8 w-auto max-w-[300px] text-sm">
+                <SelectValue>{selectedDocTitle}</SelectValue>
+              </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All documents</SelectItem>
-                {documents.filter((d) => d.status === "ready").map((d) => <SelectItem key={d.id} value={d.id}>{d.title}</SelectItem>)}
+                {readyDocs.map((d) => (
+                  <SelectItem key={d.id} value={d.id}>
+                    {d.title}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
           <div className="flex-1 space-y-5 overflow-y-auto p-4 md:p-6">
             {messages.map((m, i) =>
               m.role === "user" ? (
-                <div key={i} className="ml-auto max-w-[85%] rounded-2xl rounded-br-sm bg-primary px-4 py-2.5 text-sm text-primary-foreground md:max-w-[70%]">{m.text}</div>
+                <div
+                  key={i}
+                  className="ml-auto max-w-[85%] rounded-2xl rounded-br-sm bg-primary px-4 py-2.5 text-sm text-primary-foreground md:max-w-[70%]"
+                >
+                  {m.text}
+                </div>
               ) : (
                 <div key={i} className="flex max-w-[92%] gap-3 md:max-w-[80%]">
-                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand text-primary-foreground"><Sparkles className="h-4 w-4" /></span>
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-brand text-primary-foreground">
+                    <Sparkles className="h-4 w-4" />
+                  </span>
                   <div className="min-w-0">
                     {m.pending ? (
                       <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-3">
                         <div className="flex items-center gap-1.5">
-                          {[0, 150, 300].map((d) => <span key={d} className="h-2 w-2 animate-bounce rounded-full bg-primary/60" style={{ animationDelay: `${d}ms` }} />)}
-                          <span className="ml-2 text-xs text-muted-foreground">Responses will stream here once the AI is connected</span>
+                          {[0, 150, 300].map((d) => (
+                            <span
+                              key={d}
+                              className="h-2 w-2 animate-bounce rounded-full bg-primary/60"
+                              style={{ animationDelay: `${d}ms` }}
+                            />
+                          ))}
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            Analyzing document pages with Gemini AI…
+                          </span>
                         </div>
                       </div>
                     ) : (
-                      <div className="whitespace-pre-line rounded-2xl rounded-tl-sm bg-muted px-4 py-3 text-sm leading-relaxed">{m.text}</div>
+                      <div className="whitespace-pre-line rounded-2xl rounded-tl-sm bg-muted px-4 py-3 text-sm leading-relaxed">
+                        {m.text}
+                      </div>
                     )}
-                    {m.sources && (
+                    {m.sources && m.sources.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1.5">
-                        {m.sources.map((s) => <span key={s} className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-0.5 text-xs text-muted-foreground"><FileText className="h-3 w-3" />{s}</span>)}
+                        {m.sources.map((s) => (
+                          <span
+                            key={s}
+                            className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-0.5 text-xs text-muted-foreground"
+                          >
+                            <FileText className="h-3 w-3" />
+                            {s}
+                          </span>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -115,12 +314,49 @@ function Tutor() {
           </div>
           <div className="border-t p-3 md:p-4">
             <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
-              {suggestions.map((s) => <button key={s} onClick={() => send(s)} className="shrink-0 rounded-full border px-3 py-1 text-xs hover:border-primary/40 hover:bg-primary-soft">{s}</button>)}
+              {suggestions.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  disabled={sending}
+                  onClick={() => void send(s)}
+                  className="shrink-0 rounded-full border px-3 py-1 text-xs hover:border-primary/40 hover:bg-primary-soft disabled:opacity-50"
+                >
+                  {s}
+                </button>
+              ))}
             </div>
-            <form onSubmit={(e) => { e.preventDefault(); send(input); }} className="flex items-end gap-2 rounded-xl border bg-background p-2 focus-within:ring-2 focus-within:ring-ring/30">
-              <Button type="button" variant="ghost" size="icon" aria-label="Attach document"><Paperclip className="h-4 w-4" /></Button>
-              <Textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); } }} rows={1} placeholder="Ask about your document…" className="min-h-9 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0" />
-              <Button type="submit" size="icon" aria-label="Send" disabled={!input.trim()}><Send className="h-4 w-4" /></Button>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void send(input);
+              }}
+              className="flex items-end gap-2 rounded-xl border bg-background p-2 focus-within:ring-2 focus-within:ring-ring/30"
+            >
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="Upload or switch document"
+                onClick={() => void navigate({ to: "/library" })}
+              >
+                <Paperclip className="h-4 w-4" />
+              </Button>
+              <Textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void send(input);
+                  }
+                }}
+                rows={1}
+                placeholder="Ask about your document…"
+                className="min-h-9 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
+              />
+              <Button type="submit" size="icon" aria-label="Send" disabled={!input.trim() || sending}>
+                <Send className="h-4 w-4" /></Button>
             </form>
           </div>
         </div>

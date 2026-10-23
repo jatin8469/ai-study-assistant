@@ -1,7 +1,7 @@
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import {
-  LayoutDashboard, MessageSquareText, Library, NotebookPen, ListChecks, History, Settings, GraduationCap, Bell, LogOut,
+  LayoutDashboard, MessageSquareText, Library, NotebookPen, ListChecks, History, Settings, GraduationCap, Bell, LogOut, LogIn, UserPlus,
 } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarInset,
@@ -12,6 +12,8 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useAuth } from "@/lib/firebase-client";
+import { toast } from "sonner";
 
 export const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
@@ -39,6 +41,19 @@ function Brand() {
 function AppSidebar() {
   const path = useRouterState({ select: (r) => r.location.pathname });
   const { setOpenMobile } = useSidebar();
+  const navigate = useNavigate();
+  const { displayName, email, initials, isAnonymous, studentMeta, signOut } = useAuth();
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+      toast.success("Signed out successfully");
+      await navigate({ to: "/signin" });
+    } catch {
+      toast.error("Failed to sign out");
+    }
+  };
+
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader className="border-b border-sidebar-border py-3">
@@ -67,19 +82,44 @@ function AppSidebar() {
           <DropdownMenuTrigger asChild>
             <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent">
               <Avatar className="h-8 w-8 rounded-lg">
-                <AvatarFallback className="rounded-lg bg-primary-soft text-xs font-semibold text-primary">JS</AvatarFallback>
+                <AvatarFallback className="rounded-lg bg-primary-soft text-xs font-semibold text-primary">
+                  {initials}
+                </AvatarFallback>
               </Avatar>
               <div className="grid flex-1 text-left leading-tight">
-                <span className="truncate text-sm font-semibold">Jatin Sharma</span>
-                <span className="truncate text-xs text-muted-foreground">B.E. Computer Engg · Sem 5</span>
+                <span className="truncate text-sm font-semibold">{displayName}</span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {isAnonymous ? "Guest Study Session" : studentMeta.branch}
+                </span>
               </div>
             </SidebarMenuButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent side="top" align="start" className="w-56">
-            <DropdownMenuLabel>jatin@college.edu</DropdownMenuLabel>
+            <DropdownMenuLabel className="truncate">{email}</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem asChild><Link to="/settings"><Settings className="mr-2 h-4 w-4" />Settings</Link></DropdownMenuItem>
-            <DropdownMenuItem asChild><Link to="/signin"><LogOut className="mr-2 h-4 w-4" />Sign out</Link></DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link to="/settings">
+                <Settings className="mr-2 h-4 w-4" />Settings
+              </Link>
+            </DropdownMenuItem>
+            {isAnonymous ? (
+              <>
+                <DropdownMenuItem asChild>
+                  <Link to="/signin">
+                    <LogIn className="mr-2 h-4 w-4" />Sign in with email
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link to="/signup">
+                    <UserPlus className="mr-2 h-4 w-4" />Create account
+                  </Link>
+                </DropdownMenuItem>
+              </>
+            ) : (
+              <DropdownMenuItem onClick={() => void handleSignOut()}>
+                <LogOut className="mr-2 h-4 w-4" />Sign out
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarFooter>
@@ -156,7 +196,7 @@ export function StatusBadge({ status, progress }: { status: "ready" | "processin
 export function DemoNote() {
   return (
     <p className="mt-8 text-center text-xs text-muted-foreground">
-      Design preview with sample data — AI, uploads and saving are not connected yet.
+      Powered by Firebase Auth, Cloud Firestore &amp; Google Gemini 2.5 Flash — all documents, notes, chats, and quizzes sync securely to your account.
     </p>
   );
 }
