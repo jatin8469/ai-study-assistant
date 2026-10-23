@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
 import { apiRequest } from "@/lib/firebase-client";
-import { formatRelativeTime, useStudyDocuments, type ApiHistoryItem } from "@/lib/study-api";
+import { fetchHistoryList, formatRelativeTime, useStudyDocuments, type ApiHistoryItem } from "@/lib/study-api";
 
 export const Route = createFileRoute("/tutor")({
   head: () => ({
@@ -105,8 +105,8 @@ function Tutor() {
 
   const loadHistory = async () => {
     try {
-      const res = await apiRequest<{ history: ApiHistoryItem[] }>("/api/history?type=chat");
-      setChatHistory(res.history);
+      const list = await fetchHistoryList("chat");
+      setChatHistory(list);
     } catch {
       // ignore
     }
@@ -126,7 +126,7 @@ function Tutor() {
       .filter((m) => !m.pending && m.text.trim().length > 0)
       .slice(-6)
       .map((m) => ({
-        role: m.role === "user" ? ("user" as const) : ("model" as const),
+        role: m.role,
         text: m.text,
       }));
 
@@ -138,19 +138,18 @@ function Tutor() {
       const res = await apiRequest<{
         id: string;
         answer: string;
-        sources: { pageNumber: number; snippet: string }[];
+        sources: string[];
         supported: boolean;
       }>("/api/ai/chat", {
         method: "POST",
-        body: JSON.stringify({
+        body: {
           documentId: targetDocId,
           question: trimmed,
           history: priorTurns,
-        }),
+        },
       });
 
-      const docTitle = readyDocs.find((d) => d.id === targetDocId)?.title ?? "Document";
-      const sourceLabels = (res.sources ?? []).map((s) => `${docTitle.split("—")[0]?.trim() ?? "Doc"} p. ${s.pageNumber}`);
+      const sourceLabels = res.sources ?? [];
 
       setMessages((m) => [
         ...m.slice(0, -1),
@@ -181,19 +180,16 @@ function Tutor() {
     setActiveChatId(item.id);
     if (item.documentId) setCtx(item.documentId);
     try {
-      const res = await apiRequest<{
-        history: ApiHistoryItem & {
-          question?: string;
-          answer?: string;
-          sources?: { pageNumber: number; snippet: string }[];
-        };
-      }>(`/api/history/${item.id}`);
-      const h = res.history;
-      if (h.question && h.answer) {
-        const labels = (h.sources ?? []).map((s) => `Page ${s.pageNumber}`);
+      const res = await apiRequest<{ item?: ApiHistoryItem }>(`/api/history/${item.id}`);
+      const p = res.item?.payload ?? item.payload ?? {};
+      const question = typeof p["question"] === "string" ? p["question"] : item.title;
+      const answer = typeof p["answer"] === "string" ? p["answer"] : "";
+      const rawSources = Array.isArray(p["sources"]) ? p["sources"] : [];
+      const labels = rawSources.filter((s): s is string => typeof s === "string");
+      if (question && answer) {
         setMessages([
-          { role: "user", text: h.question },
-          { role: "ai", text: h.answer, ...(labels.length > 0 ? { sources: labels } : {}) },
+          { role: "user", text: question },
+          { role: "ai", text: answer, ...(labels.length > 0 ? { sources: labels } : {}) },
         ]);
       }
     } catch {

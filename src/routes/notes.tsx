@@ -94,45 +94,49 @@ function Notes() {
     setState("loading");
     setErrorMessage("");
     try {
-      if (type === "simple" && topic.trim().length >= 2) {
+      if (type === "simple") {
+        const targetTopic = topic.trim() || selectedDoc.title;
         const res = await apiRequest<{
-          title: string;
+          topic: string;
           explanation: string;
-          analogy: string;
           keyTakeaways: string[];
-          sourceRange: string;
+          sources: string[];
         }>("/api/ai/explain", {
           method: "POST",
-          body: JSON.stringify({
+          body: {
             documentId: selectedDoc.id,
-            topic: topic.trim(),
-          }),
+            topic: targetTopic,
+            level: "beginner",
+          },
         });
         setNote({
-          title: res.title,
+          title: `${res.topic} — Simple Explanation`,
           sections: [
             { heading: "Simple Explanation", bullets: [res.explanation] },
-            { heading: "Real-world Analogy", bullets: [res.analogy] },
             { heading: "Key Takeaways", bullets: res.keyTakeaways },
           ],
-          sourceRange: `${selectedDoc.title} · ${res.sourceRange}`,
+          sourceRange: res.sources.length > 0 ? res.sources.join(" · ") : selectedDoc.title,
         });
       } else {
         const res = await apiRequest<{
           title: string;
+          summary: string;
           sections: { heading: string; bullets: string[] }[];
-          sourceRange: string;
+          sources: string[];
         }>("/api/ai/summarize", {
           method: "POST",
-          body: JSON.stringify({
+          body: {
             documentId: selectedDoc.id,
-            noteType: type,
-          }),
+            style: type,
+          },
         });
         setNote({
           title: res.title,
-          sections: res.sections,
-          sourceRange: `${selectedDoc.title} · ${res.sourceRange}`,
+          sections: [
+            { heading: "Executive Summary", bullets: [res.summary] },
+            ...res.sections,
+          ],
+          sourceRange: res.sources.length > 0 ? res.sources.join(" · ") : selectedDoc.title,
         });
       }
       setState("done");

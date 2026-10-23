@@ -1,9 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { FileText, MessageSquareText, NotebookPen } from "lucide-react";
+import { FileText, MessageSquareText, NotebookPen, Trash2 } from "lucide-react";
 import { AppShell, DemoNote, SectionCard, StatusBadge } from "@/components/app-shell";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { conversations, documents, notesHistory, quizAttempts, quizScores } from "@/lib/sample-data";
+import { apiRequest } from "@/lib/firebase-client";
+import { conversations, notesHistory, quizAttempts, quizScores } from "@/lib/sample-data";
+import { fetchHistoryList, formatRelativeTime, useStudyDocuments, type ApiHistoryItem } from "@/lib/study-api";
 
 export const Route = createFileRoute("/history")({
   head: () => ({
@@ -17,29 +22,99 @@ export const Route = createFileRoute("/history")({
   component: History,
 });
 
-function Row({ icon: Icon, title, meta, right }: { icon: React.ComponentType<{ className?: string }>; title: string; meta: string; right?: React.ReactNode }) {
+function Row({
+  icon: Icon,
+  title,
+  meta,
+  right,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  meta: string;
+  right?: React.ReactNode;
+}) {
   return (
     <li className="flex items-center gap-3 py-3">
-      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground"><Icon className="h-4 w-4" /></span>
-      <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{title}</p><p className="truncate text-xs text-muted-foreground">{meta}</p></div>
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
+        <Icon className="h-4 w-4" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{title}</p>
+        <p className="truncate text-xs text-muted-foreground">{meta}</p>
+      </div>
       {right}
     </li>
   );
 }
 
 function History() {
+  const { docs } = useStudyDocuments();
+  const [items, setItems] = useState<ApiHistoryItem[]>([]);
+
+  const loadHistory = async () => {
+    try {
+      const list = await fetchHistoryList();
+      setItems(list);
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    void loadHistory();
+  }, []);
+
+  const handleDelete = async (id: string) => {
+    try {
+      await apiRequest(`/api/history/${id}`, { method: "DELETE" });
+      setItems((prev) => prev.filter((x) => x.id !== id));
+      toast.success("History entry removed");
+    } catch {
+      toast.error("Could not delete history entry");
+    }
+  };
+
+  const liveChats = items.filter((i) => i.type === "chat");
+  const liveNotes = items.filter((i) => i.type === "note");
+  const liveAttempts = items.filter((i) => i.type === "quiz_attempt");
+
+  const chartData =
+    liveAttempts.length >= 2
+      ? [...liveAttempts]
+          .reverse()
+          .map((a, idx) => ({
+            attempt: `Q${idx + 1}`,
+            score: a.percent ?? (a.total ? Math.round(((a.score ?? 0) / a.total) * 100) : 0),
+          }))
+      : quizScores;
+
+  const stats = [
+    [String(liveChats.length || conversations.length), "AI chats"],
+    [String(liveNotes.length || notesHistory.length), "Notes generated"],
+    [String(docs.length), "Documents"],
+    [String(liveAttempts.length || quizAttempts.length), "Quizzes taken"],
+  ] as const;
+
   return (
     <AppShell title="Study History">
       <div className="grid gap-4 md:grid-cols-4">
-        {[["24", "AI chats"], ["11", "Notes generated"], ["6", "Documents"], ["14", "Quizzes taken"]].map(([v, l]) => (
-          <div key={l} className="rounded-xl border bg-card p-4 shadow-card"><p className="font-display text-2xl font-bold">{v}</p><p className="text-xs text-muted-foreground">{l}</p></div>
+        {stats.map(([v, l]) => (
+          <div key={l} className="rounded-xl border bg-card p-4 shadow-card">
+            <p className="font-display text-2xl font-bold">{v}</p>
+            <p className="text-xs text-muted-foreground">{l}</p>
+          </div>
         ))}
       </div>
-      <SectionCard title="Quiz score progress" description="Last 3 weeks" className="mt-4">
+      <SectionCard title="Quiz score progress" description="Performance across recent attempts" className="mt-4">
         <div className="h-60">
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={quizScores}>
-              <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.25} /><stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0} /></linearGradient></defs>
+            <AreaChart data={chartData}>
+              <defs>
+                <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.25} />
+                  <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0} />
+                </linearGradient>
+              </defs>
               <CartesianGrid vertical={false} stroke="var(--border)" />
               <XAxis dataKey="attempt" tickLine={false} axisLine={false} fontSize={12} stroke="var(--muted-foreground)" />
               <YAxis domain={[0, 100]} tickLine={false} axisLine={false} fontSize={12} width={30} stroke="var(--muted-foreground)" />
@@ -59,15 +134,57 @@ function History() {
         <TabsContent value="quizzes">
           <div className="overflow-x-auto rounded-xl border bg-card shadow-card">
             <table className="w-full text-sm">
-              <thead className="border-b bg-muted/50 text-left text-xs text-muted-foreground"><tr><th className="px-4 py-2.5 font-medium">Topic</th><th className="hidden px-4 py-2.5 font-medium sm:table-cell">Difficulty</th><th className="px-4 py-2.5 font-medium">Score</th><th className="px-4 py-2.5 font-medium">Date</th></tr></thead>
+              <thead className="border-b bg-muted/50 text-left text-xs text-muted-foreground">
+                <tr>
+                  <th className="px-4 py-2.5 font-medium">Topic</th>
+                  <th className="hidden px-4 py-2.5 font-medium sm:table-cell">Difficulty</th>
+                  <th className="px-4 py-2.5 font-medium">Score</th>
+                  <th className="px-4 py-2.5 font-medium">Date</th>
+                </tr>
+              </thead>
               <tbody className="divide-y">
+                {liveAttempts.map((a) => {
+                  const score = a.score ?? 0;
+                  const total = a.total ?? 5;
+                  const pct = a.percent ?? Math.round((score / total) * 100);
+                  return (
+                    <tr key={a.id}>
+                      <td className="px-4 py-3">
+                        <p className="font-medium">{a.title}</p>
+                        <p className="text-xs text-muted-foreground">{a.documentTitle}</p>
+                      </td>
+                      <td className="hidden px-4 py-3 capitalize sm:table-cell">{a.difficulty ?? "medium"}</td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`font-semibold ${
+                            pct >= 75 ? "text-success" : pct >= 60 ? "text-warning" : "text-destructive"
+                          }`}
+                        >
+                          {score}/{total} ({pct}%)
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">{formatRelativeTime(a.createdAt)}</td>
+                    </tr>
+                  );
+                })}
                 {quizAttempts.map((a) => {
                   const pct = Math.round((a.score / a.total) * 100);
                   return (
                     <tr key={a.id}>
-                      <td className="px-4 py-3"><p className="font-medium">{a.topic}</p><p className="text-xs text-muted-foreground">{a.subject}</p></td>
+                      <td className="px-4 py-3">
+                        <p className="font-medium">{a.topic}</p>
+                        <p className="text-xs text-muted-foreground">{a.subject}</p>
+                      </td>
                       <td className="hidden px-4 py-3 sm:table-cell">{a.difficulty}</td>
-                      <td className="px-4 py-3"><span className={`font-semibold ${pct >= 75 ? "text-success" : pct >= 60 ? "text-warning" : "text-destructive"}`}>{a.score}/{a.total}</span></td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`font-semibold ${
+                            pct >= 75 ? "text-success" : pct >= 60 ? "text-warning" : "text-destructive"
+                          }`}
+                        >
+                          {a.score}/{a.total}
+                        </span>
+                      </td>
                       <td className="px-4 py-3 text-muted-foreground">{a.date}</td>
                     </tr>
                   );
@@ -76,9 +193,65 @@ function History() {
             </table>
           </div>
         </TabsContent>
-        <TabsContent value="chats"><SectionCard><ul className="divide-y">{conversations.map((c) => <Row key={c.id} icon={MessageSquareText} title={c.title} meta={`${c.doc} · ${c.time}`} />)}</ul></SectionCard></TabsContent>
-        <TabsContent value="notes"><SectionCard><ul className="divide-y">{notesHistory.map((n) => <Row key={n.id} icon={NotebookPen} title={n.title} meta={`${n.type} · ${n.date}`} />)}</ul></SectionCard></TabsContent>
-        <TabsContent value="docs"><SectionCard><ul className="divide-y">{documents.map((d) => <Row key={d.id} icon={FileText} title={d.title} meta={`${d.subject} · ${d.uploaded}`} right={<StatusBadge status={d.status} />} />)}</ul></SectionCard></TabsContent>
+        <TabsContent value="chats">
+          <SectionCard>
+            <ul className="divide-y">
+              {liveChats.map((c) => (
+                <Row
+                  key={c.id}
+                  icon={MessageSquareText}
+                  title={c.title}
+                  meta={`${c.documentTitle} · ${formatRelativeTime(c.createdAt)}`}
+                  right={
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => void handleDelete(c.id)}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  }
+                />
+              ))}
+              {conversations.map((c) => (
+                <Row key={c.id} icon={MessageSquareText} title={c.title} meta={`${c.doc} · ${c.time}`} />
+              ))}
+            </ul>
+          </SectionCard>
+        </TabsContent>
+        <TabsContent value="notes">
+          <SectionCard>
+            <ul className="divide-y">
+              {liveNotes.map((n) => (
+                <Row
+                  key={n.id}
+                  icon={NotebookPen}
+                  title={n.title}
+                  meta={`${n.noteType ?? "Notes"} · ${formatRelativeTime(n.createdAt)}`}
+                  right={
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => void handleDelete(n.id)}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  }
+                />
+              ))}
+              {notesHistory.map((n) => (
+                <Row key={n.id} icon={NotebookPen} title={n.title} meta={`${n.type} · ${n.date}`} />
+              ))}
+            </ul>
+          </SectionCard>
+        </TabsContent>
+        <TabsContent value="docs">
+          <SectionCard>
+            <ul className="divide-y">
+              {docs.map((d) => (
+                <Row
+                  key={d.id}
+                  icon={FileText}
+                  title={d.title}
+                  meta={`${d.subject} · ${d.uploaded}`}
+                  right={<StatusBadge status={d.status} />}
+                />
+              ))}
+            </ul>
+          </SectionCard>
+        </TabsContent>
       </Tabs>
       <DemoNote />
     </AppShell>

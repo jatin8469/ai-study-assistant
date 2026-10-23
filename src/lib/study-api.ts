@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiRequest } from "./firebase-client";
-import type { StudyDoc } from "./sample-data";
+import { documents as sampleDocs, type StudyDoc } from "./sample-data";
 
 export interface ApiDocumentSummary {
   id: string;
@@ -22,6 +22,9 @@ export interface ApiDocumentDetail extends ApiDocumentSummary {
   pages: { pageNumber: number; text: string }[];
 }
 
+export type ApiDocumentItem = ApiDocumentDetail;
+export type StudyDocView = StudyDoc;
+
 export interface ApiHistoryItem {
   id: string;
   uid: string;
@@ -31,6 +34,44 @@ export interface ApiHistoryItem {
   documentTitle?: string;
   payload: Record<string, unknown>;
   createdAt: string;
+  preview?: string;
+  score?: number;
+  total?: number;
+  percent?: number;
+  difficulty?: string;
+  noteType?: string;
+}
+
+export function enrichHistoryItem(item: ApiHistoryItem): ApiHistoryItem {
+  const p = item.payload ?? {};
+  const answer = typeof p["answer"] === "string" ? p["answer"] : undefined;
+  const summary = typeof p["summary"] === "string" ? p["summary"] : undefined;
+  const explanation = typeof p["explanation"] === "string" ? p["explanation"] : undefined;
+  const previewText = answer ?? summary ?? explanation ?? item.title;
+  const score = typeof p["score"] === "number" ? p["score"] : item.score;
+  const total = typeof p["total"] === "number" ? p["total"] : item.total;
+  const percent = typeof p["percent"] === "number" ? p["percent"] : item.percent;
+  const difficulty = typeof p["difficulty"] === "string" ? p["difficulty"] : item.difficulty;
+  const noteType = typeof p["style"] === "string" ? p["style"] : item.noteType;
+
+  return {
+    ...item,
+    preview: previewText.slice(0, 120),
+    ...(score !== undefined ? { score } : {}),
+    ...(total !== undefined ? { total } : {}),
+    ...(percent !== undefined ? { percent } : {}),
+    ...(difficulty !== undefined ? { difficulty } : {}),
+    ...(noteType !== undefined ? { noteType } : {}),
+  };
+}
+
+export async function fetchHistoryList(type?: string): Promise<ApiHistoryItem[]> {
+  const qs = type ? `?type=${encodeURIComponent(type)}` : "";
+  const res = await apiRequest<{ items?: ApiHistoryItem[]; history?: ApiHistoryItem[] }>(
+    `/api/history${qs}`,
+  );
+  const raw = res.items ?? res.history ?? [];
+  return raw.map(enrichHistoryItem);
 }
 
 export function formatRelativeTime(isoDate: string): string {
@@ -56,7 +97,7 @@ export function mapApiDocToStudyDoc(doc: ApiDocumentSummary): StudyDoc {
 }
 
 export function useStudyDocuments() {
-  const [docs, setDocs] = useState<StudyDoc[]>([]);
+  const [docs, setDocs] = useState<StudyDoc[]>(sampleDocs);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
@@ -68,12 +109,14 @@ export function useStudyDocuments() {
           "/api/documents/seed",
           { method: "POST" },
         );
-        setDocs(seeded.documents.map(mapApiDocToStudyDoc));
+        if (seeded.documents.length > 0) {
+          setDocs(seeded.documents.map(mapApiDocToStudyDoc));
+        }
       } else {
         setDocs(res.documents.map(mapApiDocToStudyDoc));
       }
     } catch {
-      // Keep current state if offline
+      // Keep sample or current state if offline or in test environment
     } finally {
       setLoading(false);
     }

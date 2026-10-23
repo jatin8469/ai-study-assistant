@@ -42,7 +42,7 @@ type GradedItem = {
 
 type GradeResponse = {
   quizId: string;
-  correct: number;
+  score: number;
   total: number;
   percent: number;
   results: GradedItem[];
@@ -78,18 +78,18 @@ function Quiz() {
     try {
       const requestedCount = Math.min(Math.max(count[0] ?? 5, 1), 15);
       const res = await apiRequest<{
-        id: string;
-        title: string;
+        quizId: string;
+        documentTitle: string;
         questions: PublicQuizQuestion[];
       }>("/api/ai/quiz", {
         method: "POST",
-        body: JSON.stringify({
+        body: {
           documentId: docId,
           count: requestedCount,
           difficulty,
-        }),
+        },
       });
-      setQuizId(res.id);
+      setQuizId(res.quizId);
       setQuestions(res.questions);
       setAnswers({});
       setCurrent(0);
@@ -114,10 +114,10 @@ function Quiz() {
     try {
       const res = await apiRequest<GradeResponse>("/api/ai/quiz/grade", {
         method: "POST",
-        body: JSON.stringify({
+        body: {
           quizId,
           answers,
-        }),
+        },
       });
       setGradeResult(res);
       setStage("result");
@@ -248,7 +248,7 @@ function Quiz() {
           </span>
           <p className="mt-3 font-display text-3xl font-bold">{gradeResult?.percent ?? 0}%</p>
           <p className="text-sm text-muted-foreground">
-            {gradeResult?.correct ?? 0} of {gradeResult?.total ?? questions.length} correct · {difficulty} difficulty
+            {gradeResult?.score ?? 0} of {gradeResult?.total ?? questions.length} correct · {difficulty} difficulty
           </p>
           <div className="mt-4 flex gap-2">
             <Button variant="outline" onClick={() => setStage("setup")}>

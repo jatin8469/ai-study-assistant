@@ -104,6 +104,11 @@ export async function apiRequest<T>(
   let requestBody: BodyInit | null = null;
   if (options.formData) {
     requestBody = options.formData;
+  } else if (typeof FormData !== "undefined" && options.body instanceof FormData) {
+    requestBody = options.body;
+  } else if (typeof options.body === "string") {
+    headers["Content-Type"] = "application/json";
+    requestBody = options.body;
   } else if (options.body !== undefined) {
     headers["Content-Type"] = "application/json";
     requestBody = JSON.stringify(options.body);
@@ -145,8 +150,10 @@ export interface AuthContextValue {
   signUp: (name: string, email: string, password: string) => Promise<void>;
   signInGuest: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
+  signOut: () => Promise<void>;
   signOutUser: () => Promise<void>;
   updateStudentProfile: (updates: {
+    name?: string;
     displayName?: string;
     college?: string;
     branch?: string;
@@ -244,11 +251,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const updateStudentProfile = useCallback(
-    async (updates: { displayName?: string; college?: string; branch?: string }) => {
+    async (updates: { name?: string; displayName?: string; college?: string; branch?: string }) => {
       const auth = getFirebaseClientAuth();
-      if (auth?.currentUser && updates.displayName !== undefined) {
+      const nextName = updates.displayName ?? updates.name;
+      if (auth?.currentUser && nextName !== undefined) {
         await updateProfile(auth.currentUser, {
-          displayName: updates.displayName.trim(),
+          displayName: nextName.trim(),
         });
         setProfileTick((t) => t + 1);
       }
@@ -294,6 +302,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signUp,
       signInGuest,
       resetPassword,
+      signOut: signOutUser,
       signOutUser,
       updateStudentProfile,
     };
