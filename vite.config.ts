@@ -4,6 +4,7 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import tsconfigPaths from "vite-tsconfig-paths";
+import { nitro } from "nitro/vite";
 import { createBackendApp } from "./src/backend/app";
 
 function expressApiPlugin(): Plugin {
@@ -35,5 +36,6 @@ export default defineConfig({
       server: { entry: "server" },
     }),
     viteReact(),
+    nitro(),
   ],
 });
