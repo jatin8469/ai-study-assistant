@@ -68,6 +68,25 @@ export function createDocumentsRouter(deps: DocumentsRouterDeps): Router {
     }
   });
 
+  // GET /api/documents/:id — get single document including extracted pages (owner only)
+  router.get("/:id", async (req, res, next) => {
+    try {
+      const uid = getAuthenticatedUid(req);
+      const docId = (req.params["id"] ?? "").trim();
+      if (!docId) {
+        throw new AppError(400, "VALIDATION_ERROR", "Document ID is required.");
+      }
+      const doc = await deps.repository.getDocumentById(docId);
+      if (!doc) {
+        throw new AppError(404, "NOT_FOUND", "Document not found.");
+      }
+      assertOwnership(doc.uid, uid);
+      res.status(200).json({ document: doc });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // POST /api/documents — validated PDF upload, extraction, storage, and metadata creation
   router.post("/", upload.single("file"), async (req, res, next) => {
     try {
