@@ -66,6 +66,21 @@ export default {
       return await normalizeCatastrophicSsrResponse(response);
     } catch (error) {
       console.error(error);
+      const isApi = new URL(request.url).pathname.startsWith("/api");
+      if (isApi) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: "INTERNAL_ERROR",
+              message: error instanceof Error ? error.message : String(error),
+            },
+          }),
+          {
+            status: 500,
+            headers: { "content-type": "application/json; charset=utf-8" },
+          },
+        );
+      }
       return new Response(renderErrorPage(), {
         status: 500,
         headers: { "content-type": "text/html; charset=utf-8" },
