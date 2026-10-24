@@ -107,25 +107,91 @@ export interface PdfExtractor {
   extractPages(buffer: Buffer): Promise<ExtractedPdfResult>;
 }
 
-function extractTextFromContentStream(streamText: string): string {
-  const textChunks: string[] = [];
-  const literalRegex = /\(([^()\\]*(?:\\.[^()\\]*)*)\)/g;
-  let litMatch: RegExpExecArray | null;
-  while ((litMatch = literalRegex.exec(streamText)) !== null) {
-    const decoded = (litMatch[1] ?? "")
-      .replace(/\\n/g, "\n")
-      .replace(/\\r/g, "\r")
-      .replace(/\\t/g, "\t")
-      .replace(/\\\(/g, "(")
-      .replace(/\\\)/g, ")")
-      .replace(/\\\\/g, "\\")
-      // Remove non-printable control chars
-      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
-    if (decoded.trim().length > 0) {
-      textChunks.push(decoded.trim());
+/**
+ * Checks whether a candidate string is genuine human-readable text rather than
+ * binary JPEG/font/compressed stream bytes decoded as Latin-1.
+ */
+export function isReadableText(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return false;
+
+  let asciiPrintable = 0;
+  let alphaNum = 0;
+  let highBinary = 0;
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const code = trimmed.charCodeAt(i);
+    if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57)) {
+      alphaNum++;
+      asciiPrintable++;
+    } else if (code >= 32 && code <= 126) {
+      asciiPrintable++;
+    } else if (code === 9 || code === 10 || code === 13) {
+      asciiPrintable++;
+    } else if (code >= 0x2000 && code <= 0x206f) {
+      // Standard Unicode punctuation (en-dash, quotes, bullets)
+      asciiPrintable++;
+    } else if (code >= 0x80 && code <= 0xff) {
+      highBinary++;
     }
   }
-  return textChunks.join(" ").replace(/\s+/g, " ").trim();
+
+  const total = trimmed.length;
+  // Reject strings with > 8% Latin-1 high bytes (typical of JPEG/font binary streams like ÿÍÿØ)
+  if (highBinary / total > 0.08) return false;
+  // Require at least 85% printable characters and at least 35% alphanumeric characters
+  if (asciiPrintable / total < 0.85) return false;
+  if (alphaNum / total < 0.35) return false;
+
+  return true;
+}
+
+export function cleanReadableText(text: string): string {
+  return text
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractTextFromContentStream(streamText: string): string {
+  // Reject streams that are overwhelmingly binary
+  let binaryCount = 0;
+  const sampleLen = Math.min(streamText.length, 2000);
+  for (let i = 0; i < sampleLen; i++) {
+    const code = streamText.charCodeAt(i);
+    if ((code < 32 && code !== 9 && code !== 10 && code !== 13) || (code >= 127 && code <= 255)) {
+      binaryCount++;
+    }
+  }
+  if (sampleLen > 0 && binaryCount / sampleLen > 0.15) {
+    return "";
+  }
+
+  const textChunks: string[] = [];
+  // Only match text inside BT ... ET blocks
+  const btEtRegex = /\bBT\b([\s\S]*?)\bET\b/g;
+  let btMatch: RegExpExecArray | null;
+  while ((btMatch = btEtRegex.exec(streamText)) !== null) {
+    const block = btMatch[1] ?? "";
+    const literalRegex = /\(([^()\\]*(?:\\.[^()\\]*)*)\)/g;
+    let litMatch: RegExpExecArray | null;
+    while ((litMatch = literalRegex.exec(block)) !== null) {
+      const decoded = (litMatch[1] ?? "")
+        .replace(/\\n/g, "\n")
+        .replace(/\\r/g, "\r")
+        .replace(/\\t/g, "\t")
+        .replace(/\\\(/g, "(")
+        .replace(/\\\)/g, ")")
+        .replace(/\\\\/g, "\\")
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
+        .trim();
+      if (decoded.length > 0 && isReadableText(decoded)) {
+        textChunks.push(decoded);
+      }
+    }
+  }
+  const joined = textChunks.join(" ").replace(/\s+/g, " ").trim();
+  return isReadableText(joined) ? joined : "";
 }
 
 /**
@@ -142,12 +208,23 @@ function extractFromRawPdfStreams(buffer: Buffer): PdfPageContent[] {
   }
 
   const pages: PdfPageContent[] = [];
-  const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+  const streamRegex = /(<<[\s\S]{0,600}?>>\s*)?stream\r?\n([\s\S]*?)\r?\nendstream/g;
   let match: RegExpExecArray | null;
   let pageNum = 1;
 
   while ((match = streamRegex.exec(raw)) !== null) {
-    const streamBodyLatin1 = match[1] ?? "";
+    const dictHeader = match[1] ?? "";
+    // Skip image, font, metadata, cross-reference, and object streams
+    if (/\/(?:Image|DCTDecode|JPXDecode|FontFile\d?|Metadata|XRef|ObjStm|CCITTFaxDecode|JBIG2Decode)\b/i.test(dictHeader)) {
+      continue;
+    }
+
+    const streamBodyLatin1 = match[2] ?? "";
+    // Skip raw JPEG or PNG streams
+    if (streamBodyLatin1.startsWith("\xff\xd8") || streamBodyLatin1.startsWith("\x89PNG")) {
+      continue;
+    }
+
     let decodedStream = streamBodyLatin1;
 
     // Try decompressing FlateDecode stream if it contains binary compressed data
@@ -162,7 +239,7 @@ function extractFromRawPdfStreams(buffer: Buffer): PdfPageContent[] {
       // Not a zlib stream or uncompressed stream; use raw latin1
     }
 
-    if (decodedStream.includes("BT") || decodedStream.includes("Tj") || decodedStream.includes("TJ")) {
+    if (/\bBT\b/.test(decodedStream) && /\b(?:Tj|TJ)\b/.test(decodedStream)) {
       const extracted = extractTextFromContentStream(decodedStream);
       if (extracted.length > 0) {
         pages.push({
@@ -200,7 +277,7 @@ async function extractWithGeminiMultimodal(buffer: Buffer): Promise<PdfPageConte
               },
             },
             {
-              text: "Extract the readable study text from each page of this PDF document. Return a JSON object with a 'pages' array containing { pageNumber, text } for each page (up to 25 pages).",
+              text: "Extract the readable study text from each page of this PDF document. Return a JSON object with a 'pages' array containing { pageNumber, text } for each page (up to 30 pages).",
             },
           ],
         },
@@ -235,12 +312,79 @@ async function extractWithGeminiMultimodal(buffer: Buffer): Promise<PdfPageConte
     return parsed.pages
       .map((p, idx) => ({
         pageNumber: typeof p.pageNumber === "number" && p.pageNumber > 0 ? p.pageNumber : idx + 1,
-        text: typeof p.text === "string" ? p.text.trim() : "",
+        text: typeof p.text === "string" ? cleanReadableText(p.text) : "",
       }))
       .filter((p) => p.text.length > 0);
   } catch (err) {
     console.warn("[PDF Multimodal Fallback Error]", err);
     return [];
+  }
+}
+
+function ensurePdfJsPolyfills(): void {
+  const g = globalThis as Record<string, unknown>;
+  if (typeof g["DOMMatrix"] === "undefined") {
+    class DOMMatrixPolyfill {
+      a = 1;
+      b = 0;
+      c = 0;
+      d = 1;
+      e = 0;
+      f = 0;
+      constructor(init?: number[]) {
+        if (Array.isArray(init) && init.length >= 6) {
+          this.a = init[0] ?? 1;
+          this.b = init[1] ?? 0;
+          this.c = init[2] ?? 0;
+          this.d = init[3] ?? 1;
+          this.e = init[4] ?? 0;
+          this.f = init[5] ?? 0;
+        }
+      }
+      scaleSelf(sx = 1, sy = sx) {
+        this.a *= sx;
+        this.d *= sy;
+        return this;
+      }
+      translateSelf(tx = 0, ty = 0) {
+        this.e += tx;
+        this.f += ty;
+        return this;
+      }
+      invertSelf() {
+        return this;
+      }
+      multiplySelf() {
+        return this;
+      }
+      preMultiplySelf() {
+        return this;
+      }
+      translate(tx = 0, ty = 0) {
+        return new DOMMatrixPolyfill([this.a, this.b, this.c, this.d, this.e + tx, this.f + ty]);
+      }
+      scale(sx = 1, sy = sx) {
+        return new DOMMatrixPolyfill([this.a * sx, this.b, this.c, this.d * sy, this.e, this.f]);
+      }
+    }
+    g["DOMMatrix"] = DOMMatrixPolyfill;
+  }
+  if (typeof g["Path2D"] === "undefined") {
+    g["Path2D"] = class Path2DPolyfill {
+      addPath() {}
+    };
+  }
+  if (typeof g["ImageData"] === "undefined") {
+    g["ImageData"] = class ImageDataPolyfill {
+      data: Uint8ClampedArray;
+      width: number;
+      height: number;
+      constructor(width = 1, height = 1) {
+        this.width = width;
+        this.height = height;
+        this.data = new Uint8ClampedArray(width * height * 4);
+      }
+    };
   }
 }
 
@@ -258,44 +402,57 @@ export class DefaultPdfExtractor implements PdfExtractor {
     const collectedPages: PdfPageContent[] = [];
 
     try {
+      ensurePdfJsPolyfills();
+      // Pre-load pdfjs worker onto globalThis so pdfjs-dist runs in-process on Vercel Serverless
+      // without attempting a runtime dynamic import of './pdf.worker.mjs'.
+      const g = globalThis as Record<string, unknown>;
+      if (!g["pdfjsWorker"]) {
+        // @ts-expect-error -- pdfjs-dist worker module does not ship a .d.ts file
+        const workerMod = await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
+        g["pdfjsWorker"] = workerMod;
+      }
+
       const { PDFParse } = await import("pdf-parse");
       const parser = new PDFParse({ data: new Uint8Array(buffer) });
       try {
         const textResult = await parser.getText();
         for (const page of textResult.pages) {
-          collectedPages.push({
-            pageNumber: page.num,
-            text: page.text.replace(/\s+/g, " ").trim(),
-          });
+          const cleaned = cleanReadableText(page.text);
+          if (cleaned.length > 0 && isReadableText(cleaned)) {
+            collectedPages.push({
+              pageNumber: page.num,
+              text: cleaned,
+            });
+          }
         }
-        const nonEmptyPages = collectedPages.filter((p) => p.text.trim().length > 0);
-        if (nonEmptyPages.length > 0) {
+        if (collectedPages.length > 0) {
           return {
-            pageCount: Math.max(textResult.total || collectedPages.length, nonEmptyPages.length),
-            pages: nonEmptyPages,
+            pageCount: Math.max(textResult.total || collectedPages.length, collectedPages.length),
+            pages: collectedPages,
           };
         }
       } finally {
         await parser.destroy().catch(() => undefined);
       }
-    } catch {
-      // Fall back to stream decompression or multimodal extraction
+    } catch (err) {
+      console.warn("[pdf-parse warning, falling back]", err);
     }
 
-    const fallbackPages = extractFromRawPdfStreams(buffer);
-    const validPages = fallbackPages.filter((p) => p.text.trim().length > 0);
-    if (validPages.length > 0) {
-      return {
-        pageCount: validPages.length,
-        pages: validPages,
-      };
-    }
-
+    // For real PDFs (> 1 KB) where pdf-parse found no text (e.g. scanned PDFs), use Gemini Multimodal OCR first
     const multimodalPages = await extractWithGeminiMultimodal(buffer);
     if (multimodalPages.length > 0) {
       return {
         pageCount: multimodalPages.length,
         pages: multimodalPages,
+      };
+    }
+
+    const fallbackPages = extractFromRawPdfStreams(buffer);
+    const validPages = fallbackPages.filter((p) => p.text.trim().length > 0 && isReadableText(p.text));
+    if (validPages.length > 0) {
+      return {
+        pageCount: validPages.length,
+        pages: validPages,
       };
     }
 
@@ -306,7 +463,7 @@ export class DefaultPdfExtractor implements PdfExtractor {
         pageCount: estimatedPages,
         pages: Array.from({ length: estimatedPages }, (_, idx) => ({
           pageNumber: idx + 1,
-          text: `Page ${idx + 1}: Uploaded PDF study document content.`,
+          text: `Page ${idx + 1}: Scanned PDF page (${estimatedPages} total pages). Ask the AI Tutor or generate study notes for topics covered in this document.`,
         })),
       };
     }
