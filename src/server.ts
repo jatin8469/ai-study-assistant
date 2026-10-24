@@ -1,6 +1,5 @@
 import "./lib/error-capture";
 
-import { handleWebApiRequest } from "./backend/web-handler";
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
 
@@ -9,6 +8,7 @@ type ServerEntry = {
 };
 
 let serverEntryPromise: Promise<ServerEntry> | undefined;
+let webApiHandlerPromise: Promise<(request: Request) => Promise<Response>> | undefined;
 
 async function getServerEntry(): Promise<ServerEntry> {
   if (!serverEntryPromise) {
@@ -17,6 +17,13 @@ async function getServerEntry(): Promise<ServerEntry> {
     );
   }
   return serverEntryPromise;
+}
+
+async function getWebApiHandler(): Promise<(request: Request) => Promise<Response>> {
+  if (!webApiHandlerPromise) {
+    webApiHandlerPromise = import("./backend/web-handler").then((m) => m.handleWebApiRequest);
+  }
+  return webApiHandlerPromise;
 }
 
 // h3 swallows in-handler throws into a normal 500 Response with body
@@ -50,6 +57,7 @@ export default {
     try {
       const url = new URL(request.url);
       if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
+        const handleWebApiRequest = await getWebApiHandler();
         return await handleWebApiRequest(request);
       }
 
