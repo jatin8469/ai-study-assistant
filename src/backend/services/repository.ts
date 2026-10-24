@@ -63,8 +63,23 @@ export class FirestoreStudyRepository implements StudyRepository {
   }
 
   async createDocument(doc: DocumentRecord): Promise<DocumentRecord> {
-    await this.db.collection(DOCUMENTS_COLLECTION).doc(doc.id).set(doc);
-    return doc;
+    // Ensure pages payload stays safely within Cloud Firestore's 1 MB document limit
+    const MAX_TOTAL_CHARS = 450_000;
+    let usedChars = 0;
+    const safePages: DocumentRecord["pages"] = [];
+    for (const p of doc.pages) {
+      if (usedChars >= MAX_TOTAL_CHARS) break;
+      const remaining = MAX_TOTAL_CHARS - usedChars;
+      const text = p.text.length > remaining ? p.text.slice(0, remaining) : p.text;
+      usedChars += text.length;
+      safePages.push({ pageNumber: p.pageNumber, text });
+    }
+    const safeDoc: DocumentRecord = {
+      ...doc,
+      pages: safePages,
+    };
+    await this.db.collection(DOCUMENTS_COLLECTION).doc(safeDoc.id).set(safeDoc);
+    return safeDoc;
   }
 
   async getDocumentById(id: string): Promise<DocumentRecord | null> {

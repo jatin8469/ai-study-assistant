@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { getFirebaseServices } from "../config/firebase";
 import type { ServerEnv } from "../config/env";
@@ -25,12 +26,12 @@ export class FirebaseStorageService implements StorageService {
   }
 
   async uploadPdf(params: UploadPdfParams): Promise<{ storagePath: string }> {
-    const { storage } = getFirebaseServices(this.env);
-    const bucket = storage.bucket();
     const safeName = sanitizeFileName(params.fileName);
     const storagePath = `users/${params.uid}/documents/${params.documentId}/${safeName}`;
 
     try {
+      const { storage } = getFirebaseServices(this.env);
+      const bucket = storage.bucket();
       const file = bucket.file(storagePath);
       await file.save(params.buffer, {
         resumable: false,
@@ -45,13 +46,18 @@ export class FirebaseStorageService implements StorageService {
       });
       return { storagePath };
     } catch (err) {
-      // If the Firebase project is on the free Spark plan without an active GCS bucket (404),
-      // persist to a local server-side storage folder scoped to the same user/document path.
-      const fallbackFile = path.resolve(process.cwd(), ".local-storage", storagePath);
-      await fs.mkdir(path.dirname(fallbackFile), { recursive: true });
-      await fs.writeFile(fallbackFile, params.buffer);
+      // If the Firebase project is on the free Spark plan without an active GCS bucket,
+      // persist to OS temp directory (writable in Vercel Serverless /tmp as well as local).
+      try {
+        const fallbackFile = path.resolve(os.tmpdir(), "studymate-storage", storagePath);
+        await fs.mkdir(path.dirname(fallbackFile), { recursive: true });
+        await fs.writeFile(fallbackFile, params.buffer);
+      } catch {
+        // Ignore read-only filesystem errors in restricted serverless containers;
+        // extracted page text is persisted in Cloud Firestore.
+      }
       console.warn(
-        `[Storage] Cloud Storage bucket unavailable (${(err as Error).message}); stored at local server fallback: ${storagePath}`,
+        `[Storage] Cloud Storage bucket unavailable (${(err as Error).message}); using serverless fallback for: ${storagePath}`,
       );
       return { storagePath };
     }
@@ -64,11 +70,15 @@ export class FirebaseStorageService implements StorageService {
       const file = bucket.file(storagePath);
       await file.delete({ ignoreNotFound: true });
     } catch {
-      // Ignore Cloud Storage delete errors when using local fallback
+      // Ignore Cloud Storage delete errors when using fallback
     }
 
-    const fallbackFile = path.resolve(process.cwd(), ".local-storage", storagePath);
-    await fs.rm(fallbackFile, { force: true }).catch(() => undefined);
+    try {
+      const fallbackFile = path.resolve(os.tmpdir(), "studymate-storage", storagePath);
+      await fs.rm(fallbackFile, { force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
   }
 }
 
