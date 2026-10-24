@@ -78,3 +78,13 @@ export interface HistoryRecord {
   payload: Record<string, unknown>;
   createdAt: string;
 }
+
+export interface UserProfileRecord {
+  uid: string;
+  email: string;
+  displayName: string;
+  college: string;
+  branch: string;
+  createdAt: string;
+  updatedAt: string;
+}

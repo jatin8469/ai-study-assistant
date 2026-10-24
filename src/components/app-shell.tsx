@@ -1,7 +1,7 @@
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import {
-  LayoutDashboard, MessageSquareText, Library, NotebookPen, ListChecks, History, Settings, GraduationCap, Bell, LogOut, LogIn, UserPlus,
+  LayoutDashboard, MessageSquareText, Library, NotebookPen, ListChecks, History, Settings, GraduationCap, Bell, LogOut,
 } from "lucide-react";
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarInset,
@@ -42,7 +42,7 @@ function AppSidebar() {
   const path = useRouterState({ select: (r) => r.location.pathname });
   const { setOpenMobile } = useSidebar();
   const navigate = useNavigate();
-  const { displayName, email, initials, isAnonymous, studentMeta, signOut } = useAuth();
+  const { displayName, email, initials, studentMeta, signOut } = useAuth();
 
   const handleSignOut = async () => {
     try {
@@ -89,7 +89,7 @@ function AppSidebar() {
               <div className="grid flex-1 text-left leading-tight">
                 <span className="truncate text-sm font-semibold">{displayName}</span>
                 <span className="truncate text-xs text-muted-foreground">
-                  {isAnonymous ? "Guest Study Session" : studentMeta.branch}
+                  {studentMeta.branch || email}
                 </span>
               </div>
             </SidebarMenuButton>
@@ -102,24 +102,9 @@ function AppSidebar() {
                 <Settings className="mr-2 h-4 w-4" />Settings
               </Link>
             </DropdownMenuItem>
-            {isAnonymous ? (
-              <>
-                <DropdownMenuItem asChild>
-                  <Link to="/signin">
-                    <LogIn className="mr-2 h-4 w-4" />Sign in with email
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link to="/signup">
-                    <UserPlus className="mr-2 h-4 w-4" />Create account
-                  </Link>
-                </DropdownMenuItem>
-              </>
-            ) : (
-              <DropdownMenuItem onClick={() => void handleSignOut()}>
-                <LogOut className="mr-2 h-4 w-4" />Sign out
-              </DropdownMenuItem>
-            )}
+            <DropdownMenuItem onClick={() => void handleSignOut()}>
+              <LogOut className="mr-2 h-4 w-4" />Sign out
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarFooter>
@@ -128,6 +113,30 @@ function AppSidebar() {
 }
 
 export function AppShell({ title, actions, children }: { title: string; actions?: ReactNode; children: ReactNode }) {
+  const { user, loading } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!loading && !user) {
+      void navigate({ to: "/signin", replace: true });
+    }
+  }, [loading, user, navigate]);
+
+  if (loading || !user) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3 text-center">
+          <span className="grid h-10 w-10 place-items-center rounded-xl bg-brand text-primary-foreground">
+            <GraduationCap className="h-5 w-5" />
+          </span>
+          <p className="text-sm font-medium text-muted-foreground">
+            {loading ? "Loading your StudyMate AI workspace…" : "Redirecting to sign in…"}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <SidebarProvider>
       <div className="flex min-h-screen w-full">
@@ -140,7 +149,6 @@ export function AppShell({ title, actions, children }: { title: string; actions?
               {actions}
               <Button variant="ghost" size="icon" aria-label="Notifications" className="relative">
                 <Bell className="h-4 w-4" />
-                <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-primary" />
               </Button>
             </div>
           </header>
@@ -194,9 +202,5 @@ export function StatusBadge({ status, progress }: { status: "ready" | "processin
 }
 
 export function DemoNote() {
-  return (
-    <p className="mt-8 text-center text-xs text-muted-foreground">
-      Powered by Firebase Auth, Cloud Firestore &amp; Google Gemini 2.5 Flash — all documents, notes, chats, and quizzes sync securely to your account.
-    </p>
-  );
+  return null;
 }

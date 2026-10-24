@@ -3,11 +3,10 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { FileText, MessageSquareText, NotebookPen, Trash2 } from "lucide-react";
-import { AppShell, DemoNote, SectionCard, StatusBadge } from "@/components/app-shell";
+import { AppShell, SectionCard, StatusBadge } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { apiRequest } from "@/lib/firebase-client";
-import { conversations, notesHistory, quizAttempts, quizScores } from "@/lib/sample-data";
+import { apiRequest, useAuth } from "@/lib/firebase-client";
 import { fetchHistoryList, formatRelativeTime, useStudyDocuments, type ApiHistoryItem } from "@/lib/study-api";
 
 export const Route = createFileRoute("/history")({
@@ -48,21 +47,23 @@ function Row({
 }
 
 function History() {
+  const { user } = useAuth();
   const { docs } = useStudyDocuments();
   const [items, setItems] = useState<ApiHistoryItem[]>([]);
 
   const loadHistory = async () => {
+    if (!user) return;
     try {
       const list = await fetchHistoryList();
       setItems(list);
     } catch {
-      // ignore
+      setItems([]);
     }
   };
 
   useEffect(() => {
     void loadHistory();
-  }, []);
+  }, [user]);
 
   const handleDelete = async (id: string) => {
     try {
@@ -75,24 +76,21 @@ function History() {
   };
 
   const liveChats = items.filter((i) => i.type === "chat");
-  const liveNotes = items.filter((i) => i.type === "note");
+  const liveNotes = items.filter((i) => i.type === "note" || i.type === "explanation");
   const liveAttempts = items.filter((i) => i.type === "quiz_attempt");
 
-  const chartData =
-    liveAttempts.length >= 2
-      ? [...liveAttempts]
-          .reverse()
-          .map((a, idx) => ({
-            attempt: `Q${idx + 1}`,
-            score: a.percent ?? (a.total ? Math.round(((a.score ?? 0) / a.total) * 100) : 0),
-          }))
-      : quizScores;
+  const chartData = [...liveAttempts]
+    .reverse()
+    .map((a, idx) => ({
+      attempt: `Q${idx + 1}`,
+      score: a.percent ?? (a.total ? Math.round(((a.score ?? 0) / a.total) * 100) : 0),
+    }));
 
   const stats = [
-    [String(liveChats.length || conversations.length), "AI chats"],
-    [String(liveNotes.length || notesHistory.length), "Notes generated"],
+    [String(liveChats.length), "AI chats"],
+    [String(liveNotes.length), "Notes generated"],
     [String(docs.length), "Documents"],
-    [String(liveAttempts.length || quizAttempts.length), "Quizzes taken"],
+    [String(liveAttempts.length), "Quizzes taken"],
   ] as const;
 
   return (
@@ -105,25 +103,27 @@ function History() {
           </div>
         ))}
       </div>
-      <SectionCard title="Quiz score progress" description="Performance across recent attempts" className="mt-4">
-        <div className="h-60">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartData}>
-              <defs>
-                <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.25} />
-                  <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid vertical={false} stroke="var(--border)" />
-              <XAxis dataKey="attempt" tickLine={false} axisLine={false} fontSize={12} stroke="var(--muted-foreground)" />
-              <YAxis domain={[0, 100]} tickLine={false} axisLine={false} fontSize={12} width={30} stroke="var(--muted-foreground)" />
-              <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid var(--border)", background: "var(--card)" }} />
-              <Area type="monotone" dataKey="score" stroke="var(--chart-1)" strokeWidth={2.5} fill="url(#g)" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      </SectionCard>
+      {chartData.length > 0 && (
+        <SectionCard title="Quiz score progress" description="Performance across your attempts" className="mt-4">
+          <div className="h-60">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData}>
+                <defs>
+                  <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.25} />
+                    <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid vertical={false} stroke="var(--border)" />
+                <XAxis dataKey="attempt" tickLine={false} axisLine={false} fontSize={12} stroke="var(--muted-foreground)" />
+                <YAxis domain={[0, 100]} tickLine={false} axisLine={false} fontSize={12} width={30} stroke="var(--muted-foreground)" />
+                <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid var(--border)", background: "var(--card)" }} />
+                <Area type="monotone" dataKey="score" stroke="var(--chart-1)" strokeWidth={2.5} fill="url(#g)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </SectionCard>
+      )}
       <Tabs defaultValue="quizzes" className="mt-4">
         <TabsList className="w-full justify-start overflow-x-auto sm:w-auto">
           <TabsTrigger value="quizzes">Quiz attempts</TabsTrigger>
@@ -132,128 +132,119 @@ function History() {
           <TabsTrigger value="docs">Uploads</TabsTrigger>
         </TabsList>
         <TabsContent value="quizzes">
-          <div className="overflow-x-auto rounded-xl border bg-card shadow-card">
-            <table className="w-full text-sm">
-              <thead className="border-b bg-muted/50 text-left text-xs text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-2.5 font-medium">Topic</th>
-                  <th className="hidden px-4 py-2.5 font-medium sm:table-cell">Difficulty</th>
-                  <th className="px-4 py-2.5 font-medium">Score</th>
-                  <th className="px-4 py-2.5 font-medium">Date</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {liveAttempts.map((a) => {
-                  const score = a.score ?? 0;
-                  const total = a.total ?? 5;
-                  const pct = a.percent ?? Math.round((score / total) * 100);
-                  return (
-                    <tr key={a.id}>
-                      <td className="px-4 py-3">
-                        <p className="font-medium">{a.title}</p>
-                        <p className="text-xs text-muted-foreground">{a.documentTitle}</p>
-                      </td>
-                      <td className="hidden px-4 py-3 capitalize sm:table-cell">{a.difficulty ?? "medium"}</td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`font-semibold ${
-                            pct >= 75 ? "text-success" : pct >= 60 ? "text-warning" : "text-destructive"
-                          }`}
-                        >
-                          {score}/{total} ({pct}%)
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">{formatRelativeTime(a.createdAt)}</td>
-                    </tr>
-                  );
-                })}
-                {quizAttempts.map((a) => {
-                  const pct = Math.round((a.score / a.total) * 100);
-                  return (
-                    <tr key={a.id}>
-                      <td className="px-4 py-3">
-                        <p className="font-medium">{a.topic}</p>
-                        <p className="text-xs text-muted-foreground">{a.subject}</p>
-                      </td>
-                      <td className="hidden px-4 py-3 sm:table-cell">{a.difficulty}</td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`font-semibold ${
-                            pct >= 75 ? "text-success" : pct >= 60 ? "text-warning" : "text-destructive"
-                          }`}
-                        >
-                          {a.score}/{a.total}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">{a.date}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          {liveAttempts.length === 0 ? (
+            <SectionCard>
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                No quiz attempts yet. Take a practice quiz from your uploaded PDFs to track your scores here.
+              </p>
+            </SectionCard>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border bg-card shadow-card">
+              <table className="w-full text-sm">
+                <thead className="border-b bg-muted/50 text-left text-xs text-muted-foreground">
+                  <tr>
+                    <th className="px-4 py-2.5 font-medium">Topic</th>
+                    <th className="hidden px-4 py-2.5 font-medium sm:table-cell">Difficulty</th>
+                    <th className="px-4 py-2.5 font-medium">Score</th>
+                    <th className="px-4 py-2.5 font-medium">Date</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {liveAttempts.map((a) => {
+                    const score = a.score ?? 0;
+                    const total = a.total ?? 5;
+                    const pct = a.percent ?? Math.round((score / total) * 100);
+                    return (
+                      <tr key={a.id}>
+                        <td className="px-4 py-3">
+                          <p className="font-medium">{a.title}</p>
+                          <p className="text-xs text-muted-foreground">{a.documentTitle}</p>
+                        </td>
+                        <td className="hidden px-4 py-3 capitalize sm:table-cell">{a.difficulty ?? "medium"}</td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`font-semibold ${
+                              pct >= 75 ? "text-success" : pct >= 60 ? "text-warning" : "text-destructive"
+                            }`}
+                          >
+                            {score}/{total} ({pct}%)
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">{formatRelativeTime(a.createdAt)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </TabsContent>
         <TabsContent value="chats">
           <SectionCard>
-            <ul className="divide-y">
-              {liveChats.map((c) => (
-                <Row
-                  key={c.id}
-                  icon={MessageSquareText}
-                  title={c.title}
-                  meta={`${c.documentTitle} · ${formatRelativeTime(c.createdAt)}`}
-                  right={
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => void handleDelete(c.id)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  }
-                />
-              ))}
-              {conversations.map((c) => (
-                <Row key={c.id} icon={MessageSquareText} title={c.title} meta={`${c.doc} · ${c.time}`} />
-              ))}
-            </ul>
+            {liveChats.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">No AI Tutor conversations yet.</p>
+            ) : (
+              <ul className="divide-y">
+                {liveChats.map((c) => (
+                  <Row
+                    key={c.id}
+                    icon={MessageSquareText}
+                    title={c.title}
+                    meta={`${c.documentTitle} · ${formatRelativeTime(c.createdAt)}`}
+                    right={
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => void handleDelete(c.id)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    }
+                  />
+                ))}
+              </ul>
+            )}
           </SectionCard>
         </TabsContent>
         <TabsContent value="notes">
           <SectionCard>
-            <ul className="divide-y">
-              {liveNotes.map((n) => (
-                <Row
-                  key={n.id}
-                  icon={NotebookPen}
-                  title={n.title}
-                  meta={`${n.noteType ?? "Notes"} · ${formatRelativeTime(n.createdAt)}`}
-                  right={
-                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => void handleDelete(n.id)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  }
-                />
-              ))}
-              {notesHistory.map((n) => (
-                <Row key={n.id} icon={NotebookPen} title={n.title} meta={`${n.type} · ${n.date}`} />
-              ))}
-            </ul>
+            {liveNotes.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">No AI notes generated yet.</p>
+            ) : (
+              <ul className="divide-y">
+                {liveNotes.map((n) => (
+                  <Row
+                    key={n.id}
+                    icon={NotebookPen}
+                    title={n.title}
+                    meta={`${n.noteType ?? "Notes"} · ${formatRelativeTime(n.createdAt)}`}
+                    right={
+                      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => void handleDelete(n.id)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    }
+                  />
+                ))}
+              </ul>
+            )}
           </SectionCard>
         </TabsContent>
         <TabsContent value="docs">
           <SectionCard>
-            <ul className="divide-y">
-              {docs.map((d) => (
-                <Row
-                  key={d.id}
-                  icon={FileText}
-                  title={d.title}
-                  meta={`${d.subject} · ${d.uploaded}`}
-                  right={<StatusBadge status={d.status} />}
-                />
-              ))}
-            </ul>
+            {docs.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">No PDF documents uploaded yet.</p>
+            ) : (
+              <ul className="divide-y">
+                {docs.map((d) => (
+                  <Row
+                    key={d.id}
+                    icon={FileText}
+                    title={d.title}
+                    meta={`${d.subject} · ${d.uploaded}`}
+                    right={<StatusBadge status={d.status} />}
+                  />
+                ))}
+              </ul>
+            )}
           </SectionCard>
         </TabsContent>
       </Tabs>
-      <DemoNote />
     </AppShell>
   );
 }

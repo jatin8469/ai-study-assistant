@@ -4,7 +4,6 @@ import {
   onAuthStateChanged,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  signInAnonymously,
   sendPasswordResetEmail,
   signOut,
   updateProfile,
@@ -67,7 +66,6 @@ export async function getValidIdToken(): Promise<string> {
     return await auth.currentUser.getIdToken();
   }
 
-  // Wait briefly for existing session restoration before creating an anonymous session
   const restoredUser = await new Promise<User | null>((resolve) => {
     const timeout = setTimeout(() => {
       unsubscribe();
@@ -84,8 +82,7 @@ export async function getValidIdToken(): Promise<string> {
     return await restoredUser.getIdToken();
   }
 
-  const anonCred = await signInAnonymously(auth);
-  return await anonCred.user.getIdToken();
+  throw new Error("Please sign in to continue.");
 }
 
 export async function apiRequest<T>(
@@ -148,7 +145,6 @@ export interface AuthContextValue {
   studentMeta: StudentMeta;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (name: string, email: string, password: string) => Promise<void>;
-  signInGuest: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
   signOut: () => Promise<void>;
   signOutUser: () => Promise<void>;
@@ -161,8 +157,8 @@ export interface AuthContextValue {
 }
 
 const DEFAULT_META: StudentMeta = {
-  college: "Institute of Engineering & Technology",
-  branch: "B.E. Computer Engg · Sem 5",
+  college: "",
+  branch: "",
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -174,19 +170,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [studentMeta, setStudentMeta] = useState<StudentMeta>(DEFAULT_META);
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("studymate_student_meta");
-      if (saved) {
-        const parsed = JSON.parse(saved) as Partial<StudentMeta>;
-        setStudentMeta({
-          college: parsed.college ?? DEFAULT_META.college,
-          branch: parsed.branch ?? DEFAULT_META.branch,
-        });
-      }
-    } catch {
-      // ignore storage errors
-    }
-
     const auth = getFirebaseClientAuth();
     if (!auth) {
       setLoading(false);
@@ -194,18 +177,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      if (firebaseUser) {
+      if (firebaseUser && !firebaseUser.isAnonymous) {
         setUser(firebaseUser);
         setLoading(false);
-      } else {
         try {
-          const anon = await signInAnonymously(auth);
-          setUser(anon.user);
+          const res = await apiRequest<{
+            profile: {
+              displayName?: string;
+              email?: string;
+              college?: string;
+              branch?: string;
+            } | null;
+          }>("/api/profile");
+          if (res.profile) {
+            setStudentMeta({
+              college: res.profile.college ?? "",
+              branch: res.profile.branch ?? "",
+            });
+          } else {
+            await apiRequest("/api/profile", {
+              method: "POST",
+              body: {
+                displayName:
+                  firebaseUser.displayName ||
+                  firebaseUser.email?.split("@")[0] ||
+                  "Student",
+                email: firebaseUser.email || "",
+                college: "",
+                branch: "",
+              },
+            });
+          }
         } catch {
-          setUser(null);
-        } finally {
-          setLoading(false);
+          // ignore if offline
         }
+      } else {
+        if (firebaseUser?.isAnonymous) {
+          await signOut(auth).catch(() => undefined);
+        }
+        setUser(null);
+        setStudentMeta(DEFAULT_META);
+        setLoading(false);
       }
     });
 
@@ -217,24 +229,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!auth) throw new Error("Auth unavailable");
     const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
     setUser(cred.user);
+    try {
+      await apiRequest("/api/profile", {
+        method: "POST",
+        body: {
+          displayName:
+            cred.user.displayName || cred.user.email?.split("@")[0] || "Student",
+          email: cred.user.email || email.trim(),
+        },
+      });
+    } catch {
+      // ignore
+    }
   }, []);
 
   const signUp = useCallback(async (name: string, email: string, password: string) => {
     const auth = getFirebaseClientAuth();
     if (!auth) throw new Error("Auth unavailable");
     const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-    if (name.trim()) {
-      await updateProfile(cred.user, { displayName: name.trim() });
+    const cleanName = name.trim();
+    if (cleanName) {
+      await updateProfile(cred.user, { displayName: cleanName });
     }
     setUser(cred.user);
     setProfileTick((t) => t + 1);
-  }, []);
-
-  const signInGuest = useCallback(async () => {
-    const auth = getFirebaseClientAuth();
-    if (!auth) throw new Error("Auth unavailable");
-    const cred = await signInAnonymously(auth);
-    setUser(cred.user);
+    try {
+      await apiRequest("/api/profile", {
+        method: "POST",
+        body: {
+          displayName: cleanName || email.trim().split("@")[0] || "Student",
+          email: email.trim(),
+          college: "",
+          branch: "",
+        },
+      });
+    } catch {
+      // ignore
+    }
   }, []);
 
   const resetPassword = useCallback(async (email: string) => {
@@ -248,6 +279,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!auth) return;
     await signOut(auth);
     setUser(null);
+    setStudentMeta(DEFAULT_META);
   }, []);
 
   const updateStudentProfile = useCallback(
@@ -260,35 +292,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         setProfileTick((t) => t + 1);
       }
-      setStudentMeta((prev) => {
-        const next: StudentMeta = {
-          college: updates.college?.trim() || prev.college,
-          branch: updates.branch?.trim() || prev.branch,
-        };
-        try {
-          localStorage.setItem("studymate_student_meta", JSON.stringify(next));
-        } catch {
-          // ignore
-        }
-        return next;
-      });
+      const nextMeta: StudentMeta = {
+        college: updates.college !== undefined ? updates.college.trim() : studentMeta.college,
+        branch: updates.branch !== undefined ? updates.branch.trim() : studentMeta.branch,
+      };
+      setStudentMeta(nextMeta);
+      try {
+        await apiRequest("/api/profile", {
+          method: "POST",
+          body: {
+            displayName: nextName?.trim() || auth?.currentUser?.displayName || "Student",
+            email: auth?.currentUser?.email || "",
+            college: nextMeta.college,
+            branch: nextMeta.branch,
+          },
+        });
+      } catch {
+        // ignore
+      }
     },
-    [],
+    [studentMeta.branch, studentMeta.college],
   );
 
   const value = useMemo<AuthContextValue>(() => {
     void profileTick;
-    const isAnonymous = Boolean(user?.isAnonymous);
+    const isAnonymous = false;
     const displayName =
       user?.displayName?.trim() ||
-      (user?.email ? user.email.split("@")[0] ?? "Jatin Patil" : "Jatin Patil");
-    const email = user?.email || "jatinpatil2233@gmail.com";
+      (user?.email ? user.email.split("@")[0] ?? "Student" : "Student");
+    const email = user?.email || "";
     const initials =
       displayName
         .split(/\s+/)
         .map((p) => p[0]?.toUpperCase() ?? "")
         .join("")
-        .slice(0, 2) || "JP";
+        .slice(0, 2) || "ST";
 
     return {
       user,
@@ -300,7 +338,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       studentMeta,
       signIn,
       signUp,
-      signInGuest,
       resetPassword,
       signOut: signOutUser,
       signOutUser,
@@ -313,7 +350,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     studentMeta,
     signIn,
     signUp,
-    signInGuest,
     resetPassword,
     signOutUser,
     updateStudentProfile,

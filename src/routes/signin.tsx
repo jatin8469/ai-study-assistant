@@ -1,11 +1,11 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AuthLayout } from "@/components/auth-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useAuth, getValidIdToken } from "@/lib/firebase-client";
+import { useAuth } from "@/lib/firebase-client";
 
 export const Route = createFileRoute("/signin")({
   head: () => ({
@@ -34,12 +34,18 @@ function formatFirebaseError(err: unknown): string {
 }
 
 function SignIn() {
-  const [email, setEmail] = useState("jatinpatil2233@gmail.com");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const { signIn, resetPassword } = useAuth();
+  const { user, loading, signIn, resetPassword } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!loading && user) {
+      void navigate({ to: "/", replace: true });
+    }
+  }, [loading, user, navigate]);
 
   const handleResetPassword = async () => {
     if (!email.trim()) {
@@ -55,20 +61,6 @@ function SignIn() {
       });
     } catch (err) {
       setError(formatFirebaseError(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleGuestContinue = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      await getValidIdToken();
-      toast.success("Signed in to guest study session");
-      await navigate({ to: "/" });
-    } catch {
-      setError("Could not start guest session. Please sign in with email.");
     } finally {
       setBusy(false);
     }
@@ -142,18 +134,6 @@ function SignIn() {
         </div>
         <Button type="submit" className="w-full" disabled={busy}>
           {busy ? "Signing in…" : "Sign in"}
-        </Button>
-        <div className="relative py-1 text-center text-xs text-muted-foreground">
-          <span className="bg-card px-2">or</span>
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          className="w-full"
-          disabled={busy}
-          onClick={() => void handleGuestContinue()}
-        >
-          Continue with Instant Student Demo
         </Button>
       </form>
     </AuthLayout>

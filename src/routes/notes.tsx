@@ -67,7 +67,7 @@ function Notes() {
   const [doc, setDoc] = useState("");
   const [type, setType] = useState<(typeof types)[number]["id"]>("summary");
   const [topic, setTopic] = useState("");
-  const [state, setState] = useState<"idle" | "loading" | "done" | "error">("done");
+  const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState("");
   const [note, setNote] = useState<NoteOutput>(sample);
 

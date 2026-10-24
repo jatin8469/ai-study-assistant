@@ -1,12 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { FileText, MessageSquareText, NotebookPen, ListChecks, Search, Upload, ArrowRight, Flame, Clock, Target } from "lucide-react";
-import { AppShell, DemoNote, SectionCard, StatusBadge } from "@/components/app-shell";
+import { Line, LineChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { FileText, MessageSquareText, NotebookPen, ListChecks, Search, Upload, ArrowRight, FolderOpen, Target } from "lucide-react";
+import { AppShell, EmptyState, SectionCard, StatusBadge } from "@/components/app-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { apiRequest, useAuth } from "@/lib/firebase-client";
-import { conversations, quizScores, weeklyActivity } from "@/lib/sample-data";
+import { useAuth } from "@/lib/firebase-client";
 import { fetchHistoryList, formatRelativeTime, useStudyDocuments, type ApiHistoryItem } from "@/lib/study-api";
 
 export const Route = createFileRoute("/")({
@@ -29,27 +28,50 @@ const quick = [
 ] as const;
 
 function Dashboard() {
-  const { displayName } = useAuth();
+  const { user, displayName } = useAuth();
   const { docs } = useStudyDocuments();
   const [search, setSearch] = useState("");
-  const [recentChats, setRecentChats] = useState<ApiHistoryItem[]>([]);
+  const [historyItems, setHistoryItems] = useState<ApiHistoryItem[]>([]);
 
   useEffect(() => {
+    if (!user) return;
     void (async () => {
       try {
-        void apiRequest;
-        const list = await fetchHistoryList("chat");
-        setRecentChats(list.slice(0, 3));
+        const list = await fetchHistoryList();
+        setHistoryItems(list);
       } catch {
-        // ignore
+        setHistoryItems([]);
       }
     })();
-  }, []);
+  }, [user]);
 
   const firstName = displayName.split(" ")[0] || "Student";
   const filteredDocs = search.trim()
-    ? docs.filter((d) => d.title.toLowerCase().includes(search.toLowerCase()) || d.subject.toLowerCase().includes(search.toLowerCase()))
+    ? docs.filter(
+        (d) =>
+          d.title.toLowerCase().includes(search.toLowerCase()) ||
+          d.subject.toLowerCase().includes(search.toLowerCase()),
+      )
     : docs;
+
+  const recentChats = historyItems.filter((i) => i.type === "chat").slice(0, 3);
+  const quizAttempts = historyItems.filter((i) => i.type === "quiz_attempt");
+  const avgQuizScore =
+    quizAttempts.length > 0
+      ? `${Math.round(
+          quizAttempts.reduce(
+            (acc, a) => acc + (a.percent ?? (a.total ? Math.round(((a.score ?? 0) / a.total) * 100) : 0)),
+            0,
+          ) / quizAttempts.length,
+        )}%`
+      : "—";
+
+  const quizChartData = [...quizAttempts]
+    .reverse()
+    .map((a, idx) => ({
+      attempt: `Q${idx + 1}`,
+      score: a.percent ?? (a.total ? Math.round(((a.score ?? 0) / a.total) * 100) : 0),
+    }));
 
   return (
     <AppShell
@@ -64,10 +86,12 @@ function Dashboard() {
     >
       <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <p className="text-sm text-muted-foreground">Semester 5 · Study Workspace</p>
-          <h2 className="mt-1 text-2xl font-bold">Welcome back, {firstName}</h2>
+          <p className="text-sm text-muted-foreground">Personal AI Study Workspace</p>
+          <h2 className="mt-1 text-2xl font-bold">Welcome, {firstName}</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            You have {docs.length} study documents indexed and ready for AI Q&amp;A, notes, and quizzes.
+            {docs.length === 0
+              ? "Your workspace is fresh and ready. Upload your first PDF textbook or notes to start studying."
+              : `You have ${docs.length} study document${docs.length === 1 ? "" : "s"} indexed and ready for AI Q&A, notes, and quizzes.`}
           </p>
         </div>
         <div className="relative w-full md:w-80">
@@ -75,7 +99,7 @@ function Dashboard() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search documents, subjects…"
+            placeholder="Search your documents…"
             className="bg-card pl-9"
           />
         </div>
@@ -99,9 +123,9 @@ function Dashboard() {
 
       <div className="mt-4 grid grid-cols-3 gap-3">
         {[
-          { i: Flame, l: "Day streak", v: "6" },
-          { i: Clock, l: "Hours this week", v: "8.3" },
-          { i: Target, l: "Avg. quiz score", v: "76%" },
+          { i: FileText, l: "Uploaded PDFs", v: String(docs.length) },
+          { i: MessageSquareText, l: "AI Tutor chats", v: String(historyItems.filter((i) => i.type === "chat").length) },
+          { i: Target, l: "Avg. quiz score", v: avgQuizScore },
         ].map((s) => (
           <div key={s.l} className="flex items-center gap-3 rounded-xl border bg-card p-4 shadow-card">
             <s.i className="hidden h-5 w-5 text-primary sm:block" />
@@ -125,22 +149,35 @@ function Dashboard() {
             </Button>
           }
         >
-          <ul className="divide-y">
-            {filteredDocs.slice(0, 4).map((d) => (
-              <li key={d.id} className="flex items-center gap-3 py-3">
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
-                  <FileText className="h-4 w-4" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{d.title}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {d.subject} · {d.pages} pages · {d.uploaded}
-                  </p>
-                </div>
-                <StatusBadge status={d.status} progress={d.progress} />
-              </li>
-            ))}
-          </ul>
+          {filteredDocs.length === 0 ? (
+            <EmptyState
+              icon={FolderOpen}
+              title="No documents uploaded yet"
+              description="Upload a PDF textbook or lecture notes to unlock AI Tutor Q&A, summaries, and practice quizzes."
+              action={
+                <Button asChild size="sm">
+                  <Link to="/library">Upload your first PDF</Link>
+                </Button>
+              }
+            />
+          ) : (
+            <ul className="divide-y">
+              {filteredDocs.slice(0, 4).map((d) => (
+                <li key={d.id} className="flex items-center gap-3 py-3">
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
+                    <FileText className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{d.title}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {d.subject} · {d.pages} pages · {d.uploaded}
+                    </p>
+                  </div>
+                  <StatusBadge status={d.status} progress={d.progress} />
+                </li>
+              ))}
+            </ul>
+          )}
         </SectionCard>
         <SectionCard
           title="Recent AI conversations"
@@ -150,63 +187,45 @@ function Dashboard() {
             </Button>
           }
         >
-          <ul className="space-y-3">
-            {recentChats.length > 0
-              ? recentChats.map((c) => (
-                  <li key={c.id}>
-                    <Link to="/tutor" className="-m-2 block rounded-lg p-2 hover:bg-muted">
-                      <p className="truncate text-sm font-medium">{c.title}</p>
-                      <p className="truncate text-xs text-muted-foreground">{c.preview}</p>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        {formatRelativeTime(c.createdAt)} · {c.documentTitle}
-                      </p>
-                    </Link>
-                  </li>
-                ))
-              : conversations.slice(0, 3).map((c) => (
-                  <li key={c.id}>
-                    <Link to="/tutor" className="-m-2 block rounded-lg p-2 hover:bg-muted">
-                      <p className="truncate text-sm font-medium">{c.title}</p>
-                      <p className="truncate text-xs text-muted-foreground">{c.preview}</p>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        {c.time} · {c.doc}
-                      </p>
-                    </Link>
-                  </li>
-                ))}
-          </ul>
+          {recentChats.length === 0 ? (
+            <div className="py-8 text-center">
+              <p className="text-sm font-medium">No conversations yet</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Ask questions about your PDFs in AI Tutor and they will appear here.
+              </p>
+            </div>
+          ) : (
+            <ul className="space-y-3">
+              {recentChats.map((c) => (
+                <li key={c.id}>
+                  <Link to="/tutor" className="-m-2 block rounded-lg p-2 hover:bg-muted">
+                    <p className="truncate text-sm font-medium">{c.title}</p>
+                    <p className="truncate text-xs text-muted-foreground">{c.preview}</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      {formatRelativeTime(c.createdAt)} · {c.documentTitle}
+                    </p>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </SectionCard>
-        <SectionCard title="Study activity" description="Minutes per day, this week" className="lg:col-span-2">
-          <div className="h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={weeklyActivity}>
-                <CartesianGrid vertical={false} stroke="var(--border)" />
-                <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={12} stroke="var(--muted-foreground)" />
-                <YAxis tickLine={false} axisLine={false} fontSize={12} width={30} stroke="var(--muted-foreground)" />
-                <Tooltip
-                  cursor={{ fill: "var(--muted)" }}
-                  contentStyle={{ borderRadius: 8, border: "1px solid var(--border)", background: "var(--card)" }}
-                />
-                <Bar dataKey="minutes" fill="var(--chart-1)" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </SectionCard>
-        <SectionCard title="Quiz performance" description="Score % over last attempts">
-          <div className="h-56">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={quizScores}>
-                <CartesianGrid vertical={false} stroke="var(--border)" />
-                <XAxis dataKey="attempt" tickLine={false} axisLine={false} fontSize={11} stroke="var(--muted-foreground)" />
-                <YAxis domain={[0, 100]} tickLine={false} axisLine={false} fontSize={11} width={30} stroke="var(--muted-foreground)" />
-                <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid var(--border)", background: "var(--card)" }} />
-                <Line type="monotone" dataKey="score" stroke="var(--chart-1)" strokeWidth={2.5} dot={{ r: 3 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </SectionCard>
+        {quizChartData.length > 0 && (
+          <SectionCard title="Quiz performance" description="Score % over your attempts" className="lg:col-span-3">
+            <div className="h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={quizChartData}>
+                  <CartesianGrid vertical={false} stroke="var(--border)" />
+                  <XAxis dataKey="attempt" tickLine={false} axisLine={false} fontSize={11} stroke="var(--muted-foreground)" />
+                  <YAxis domain={[0, 100]} tickLine={false} axisLine={false} fontSize={11} width={30} stroke="var(--muted-foreground)" />
+                  <Tooltip contentStyle={{ borderRadius: 8, border: "1px solid var(--border)", background: "var(--card)" }} />
+                  <Line type="monotone" dataKey="score" stroke="var(--chart-1)" strokeWidth={2.5} dot={{ r: 3 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </SectionCard>
+        )}
       </div>
-      <DemoNote />
     </AppShell>
   );
 }

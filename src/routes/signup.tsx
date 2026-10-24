@@ -1,5 +1,5 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AuthLayout } from "@/components/auth-layout";
 import { Button } from "@/components/ui/button";
@@ -34,13 +34,19 @@ function formatSignUpError(err: unknown): string {
 }
 
 function SignUp() {
-  const [name, setName] = useState("Jatin Patil");
-  const [email, setEmail] = useState("jatinpatil2233@gmail.com");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const { signUp } = useAuth();
+  const { user, loading, signUp } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!loading && user) {
+      void navigate({ to: "/", replace: true });
+    }
+  }, [loading, user, navigate]);
 
   return (
     <AuthLayout
@@ -67,7 +73,7 @@ function SignUp() {
           try {
             await signUp(name.trim(), email.trim(), password);
             toast.success("Account created!", {
-              description: "Welcome to StudyMate AI. Your starter textbooks are ready.",
+              description: "Welcome to StudyMate AI. Upload your first PDF to begin.",
             });
             await navigate({ to: "/" });
           } catch (err) {

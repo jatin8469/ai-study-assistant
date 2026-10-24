@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { apiRequest } from "./firebase-client";
-import { documents as sampleDocs, type StudyDoc } from "./sample-data";
+import { apiRequest, useAuth } from "./firebase-client";
+import type { StudyDoc } from "./sample-data";
 
 export interface ApiDocumentSummary {
   id: string;
@@ -97,30 +97,26 @@ export function mapApiDocToStudyDoc(doc: ApiDocumentSummary): StudyDoc {
 }
 
 export function useStudyDocuments() {
-  const [docs, setDocs] = useState<StudyDoc[]>(sampleDocs);
+  const { user } = useAuth();
+  const [docs, setDocs] = useState<StudyDoc[]>([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
+    if (!user) {
+      setDocs([]);
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       const res = await apiRequest<{ documents: ApiDocumentSummary[] }>("/api/documents");
-      if (res.documents.length === 0) {
-        const seeded = await apiRequest<{ documents: ApiDocumentSummary[] }>(
-          "/api/documents/seed",
-          { method: "POST" },
-        );
-        if (seeded.documents.length > 0) {
-          setDocs(seeded.documents.map(mapApiDocToStudyDoc));
-        }
-      } else {
-        setDocs(res.documents.map(mapApiDocToStudyDoc));
-      }
+      setDocs(res.documents.map(mapApiDocToStudyDoc));
     } catch {
-      // Keep sample or current state if offline or in test environment
+      setDocs([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     void refresh();

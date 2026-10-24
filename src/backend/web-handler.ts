@@ -232,6 +232,49 @@ export async function handleWebApiRequest(request: Request): Promise<Response> {
 
     const uid = await verifyRequestUid(request, verifier);
 
+    // GET /api/profile
+    if (pathname === "/api/profile" && method === "GET") {
+      const profile = repository.getUserProfile ? await repository.getUserProfile(uid) : null;
+      return jsonResponse(200, { profile });
+    }
+
+    // POST /api/profile
+    if (pathname === "/api/profile" && method === "POST") {
+      const rawBody = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+      const existing = repository.getUserProfile ? await repository.getUserProfile(uid) : null;
+      const now = new Date().toISOString();
+      const displayName =
+        typeof rawBody["displayName"] === "string" && rawBody["displayName"].trim()
+          ? rawBody["displayName"].trim()
+          : existing?.displayName ?? "Student";
+      const email =
+        typeof rawBody["email"] === "string" && rawBody["email"].trim()
+          ? rawBody["email"].trim()
+          : existing?.email ?? "";
+      const college =
+        typeof rawBody["college"] === "string"
+          ? rawBody["college"].trim()
+          : existing?.college ?? "";
+      const branch =
+        typeof rawBody["branch"] === "string"
+          ? rawBody["branch"].trim()
+          : existing?.branch ?? "";
+
+      const record = {
+        uid,
+        email,
+        displayName,
+        college,
+        branch,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      if (repository.upsertUserProfile) {
+        await repository.upsertUserProfile(record);
+      }
+      return jsonResponse(200, { profile: record });
+    }
+
     // GET /api/documents
     if (pathname === "/api/documents" && method === "GET") {
       const docs = await repository.listDocumentsByUid(uid);

@@ -125,6 +125,54 @@ export function createBackendApp(options: CreateAppOptions = {}): Express {
   // Authenticated API routes
   const requireAuth = createAuthMiddleware(tokenVerifier);
 
+  app.get("/api/profile", requireAuth, async (req, res, next) => {
+    try {
+      const uid = req.user?.uid;
+      if (!uid) throw new AppError(401, "UNAUTHORIZED", "Authentication required.");
+      const profile = repository.getUserProfile ? await repository.getUserProfile(uid) : null;
+      res.status(200).json({ profile });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post("/api/profile", requireAuth, async (req, res, next) => {
+    try {
+      const uid = req.user?.uid;
+      if (!uid) throw new AppError(401, "UNAUTHORIZED", "Authentication required.");
+      const rawBody = (req.body ?? {}) as Record<string, unknown>;
+      const existing = repository.getUserProfile ? await repository.getUserProfile(uid) : null;
+      const now = new Date().toISOString();
+      const record = {
+        uid,
+        email:
+          typeof rawBody["email"] === "string" && rawBody["email"].trim()
+            ? rawBody["email"].trim()
+            : existing?.email ?? req.user?.email ?? "",
+        displayName:
+          typeof rawBody["displayName"] === "string" && rawBody["displayName"].trim()
+            ? rawBody["displayName"].trim()
+            : existing?.displayName ?? "Student",
+        college:
+          typeof rawBody["college"] === "string"
+            ? rawBody["college"].trim()
+            : existing?.college ?? "",
+        branch:
+          typeof rawBody["branch"] === "string"
+            ? rawBody["branch"].trim()
+            : existing?.branch ?? "",
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      if (repository.upsertUserProfile) {
+        await repository.upsertUserProfile(record);
+      }
+      res.status(200).json({ profile: record });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.use(
     "/api/documents",
     requireAuth,

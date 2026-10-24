@@ -5,6 +5,7 @@ import type {
   HistoryItemType,
   HistoryRecord,
   StoredQuizRecord,
+  UserProfileRecord,
 } from "../types";
 
 export interface ListHistoryOptions {
@@ -13,6 +14,10 @@ export interface ListHistoryOptions {
 }
 
 export interface StudyRepository {
+  // User Profile
+  getUserProfile?(uid: string): Promise<UserProfileRecord | null>;
+  upsertUserProfile?(profile: UserProfileRecord): Promise<UserProfileRecord>;
+
   // Documents
   createDocument(doc: DocumentRecord): Promise<DocumentRecord>;
   getDocumentById(id: string): Promise<DocumentRecord | null>;
@@ -33,6 +38,7 @@ export interface StudyRepository {
 const DOCUMENTS_COLLECTION = "documents";
 const QUIZZES_COLLECTION = "quizzes";
 const HISTORY_COLLECTION = "history";
+const USERS_COLLECTION = "users";
 
 export class FirestoreStudyRepository implements StudyRepository {
   private readonly env?: ServerEnv | undefined;
@@ -43,6 +49,17 @@ export class FirestoreStudyRepository implements StudyRepository {
 
   private get db() {
     return getFirebaseServices(this.env).firestore;
+  }
+
+  async getUserProfile(uid: string): Promise<UserProfileRecord | null> {
+    const snap = await this.db.collection(USERS_COLLECTION).doc(uid).get();
+    if (!snap.exists) return null;
+    return snap.data() as UserProfileRecord;
+  }
+
+  async upsertUserProfile(profile: UserProfileRecord): Promise<UserProfileRecord> {
+    await this.db.collection(USERS_COLLECTION).doc(profile.uid).set(profile, { merge: true });
+    return profile;
   }
 
   async createDocument(doc: DocumentRecord): Promise<DocumentRecord> {
