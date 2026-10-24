@@ -1,7 +1,30 @@
 import "./lib/error-capture";
 
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
+
+function ensureNodeGlobalsForBundledCjs(): void {
+  const g = globalThis as Record<string, unknown>;
+  try {
+    const currentFile = fileURLToPath(import.meta.url);
+    if (typeof g["__filename"] === "undefined") {
+      g["__filename"] = currentFile;
+    }
+    if (typeof g["__dirname"] === "undefined") {
+      g["__dirname"] = path.dirname(currentFile);
+    }
+    if (typeof g["require"] === "undefined") {
+      g["require"] = createRequire(import.meta.url);
+    }
+  } catch {
+    // ignore if import.meta.url is not a file:// URL
+  }
+}
+
+ensureNodeGlobalsForBundledCjs();
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
