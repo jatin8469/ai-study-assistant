@@ -34,7 +34,7 @@ function formatFirebaseError(err: unknown): string {
 }
 
 function SignIn() {
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState("jatinpatil2233@gmail.com");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -107,7 +107,7 @@ function SignIn() {
         }}
       >
         <div className="space-y-1.5">
-          <Label htmlFor="email">College email</Label>
+          <Label htmlFor="email">Email address</Label>
           <Input
             id="email"
             name="email"
@@ -115,7 +115,7 @@ function SignIn() {
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@college.edu"
+            placeholder="jatinpatil2233@gmail.com"
           />
         </div>
         <div className="space-y-1.5">

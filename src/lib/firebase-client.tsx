@@ -281,14 +281,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const isAnonymous = Boolean(user?.isAnonymous);
     const displayName =
       user?.displayName?.trim() ||
-      (user?.email ? user.email.split("@")[0] ?? "Student" : "Jatin Sharma");
-    const email = user?.email || (isAnonymous ? "Guest Session (Signed In)" : "jatin@college.edu");
+      (user?.email ? user.email.split("@")[0] ?? "Jatin Patil" : "Jatin Patil");
+    const email = user?.email || "jatinpatil2233@gmail.com";
     const initials =
       displayName
         .split(/\s+/)
         .map((p) => p[0]?.toUpperCase() ?? "")
         .join("")
-        .slice(0, 2) || "JS";
+        .slice(0, 2) || "JP";
 
     return {
       user,

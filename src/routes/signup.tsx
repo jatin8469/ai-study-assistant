@@ -34,8 +34,8 @@ function formatSignUpError(err: unknown): string {
 }
 
 function SignUp() {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [name, setName] = useState("Jatin Patil");
+  const [email, setEmail] = useState("jatinpatil2233@gmail.com");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -85,11 +85,11 @@ function SignUp() {
             required
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Jatin Sharma"
+            placeholder="Jatin Patil"
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="email">College email</Label>
+          <Label htmlFor="email">Email address</Label>
           <Input
             id="email"
             name="email"
@@ -97,7 +97,7 @@ function SignUp() {
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="you@college.edu"
+            placeholder="jatinpatil2233@gmail.com"
           />
         </div>
         <div className="space-y-1.5">
