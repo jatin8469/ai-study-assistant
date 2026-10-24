@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
 import { apiRequest, useAuth } from "@/lib/firebase-client";
-import { fetchHistoryList, formatRelativeTime, useStudyDocuments, type ApiHistoryItem } from "@/lib/study-api";
+import { fetchHistoryList, formatAiText, formatRelativeTime, useStudyDocuments, type ApiHistoryItem } from "@/lib/study-api";
 
 export const Route = createFileRoute("/tutor")({
   head: () => ({
@@ -30,6 +30,71 @@ const suggestions = [
   "Explain the main definitions in simple terms",
   "What are the most important formulas or rules here?",
 ];
+
+function renderInlineFormatting(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, idx) => {
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+      return (
+        <strong key={idx} className="font-semibold text-foreground">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    return <span key={idx}>{part}</span>;
+  });
+}
+
+function FormattedAiMessage({ text }: { text: string }) {
+  const normalized = formatAiText(text);
+  const lines = normalized
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  if (lines.length === 0) {
+    return <p className="text-sm leading-relaxed">{text}</p>;
+  }
+
+  return (
+    <div className="space-y-2.5 text-sm leading-relaxed">
+      {lines.map((line, idx) => {
+        const numberedMatch = /^(\d+)[.)]\s+(.*)$/.exec(line);
+        if (numberedMatch) {
+          return (
+            <div key={idx} className="flex items-start gap-2.5">
+              <span className="mt-0.5 inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary/15 px-1.5 text-xs font-semibold text-primary">
+                {numberedMatch[1]}
+              </span>
+              <p className="flex-1">{renderInlineFormatting(numberedMatch[2] ?? "")}</p>
+            </div>
+          );
+        }
+
+        const bulletMatch = /^[•\-*]\s+(.*)$/.exec(line);
+        if (bulletMatch) {
+          return (
+            <div key={idx} className="flex items-start gap-2 pl-1">
+              <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
+              <p className="flex-1">{renderInlineFormatting(bulletMatch[1] ?? "")}</p>
+            </div>
+          );
+        }
+
+        const headingMatch = /^#{1,3}\s+(.*)$/.exec(line);
+        if (headingMatch) {
+          return (
+            <p key={idx} className="pt-1 font-semibold text-foreground">
+              {renderInlineFormatting(headingMatch[1] ?? "")}
+            </p>
+          );
+        }
+
+        return <p key={idx}>{renderInlineFormatting(line)}</p>;
+      })}
+    </div>
+  );
+}
 
 function ConversationList({
   items,
@@ -307,8 +372,8 @@ function Tutor() {
                           </div>
                         </div>
                       ) : (
-                        <div className="whitespace-pre-line rounded-2xl rounded-tl-sm bg-muted px-4 py-3 text-sm leading-relaxed">
-                          {m.text}
+                        <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-3">
+                          <FormattedAiMessage text={m.text} />
                         </div>
                       )}
                       {m.sources && m.sources.length > 0 && (

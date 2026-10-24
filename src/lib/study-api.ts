@@ -42,11 +42,64 @@ export interface ApiHistoryItem {
   noteType?: string;
 }
 
+export function formatAiText(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+
+  if (
+    (trimmed.startsWith("[") && trimmed.endsWith("]")) ||
+    (trimmed.startsWith("{") && trimmed.endsWith("}"))
+  ) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      const items = Array.isArray(parsed)
+        ? parsed
+        : parsed && typeof parsed === "object"
+          ? Object.values(parsed as Record<string, unknown>).find(Array.isArray) ?? [parsed]
+          : [];
+      if (Array.isArray(items) && items.length > 0) {
+        const lines = items
+          .map((item, idx) => {
+            if (typeof item === "string") return `${idx + 1}. ${item.trim()}`;
+            if (item && typeof item === "object") {
+              const obj = item as Record<string, unknown>;
+              const mainText =
+                obj["question"] ??
+                obj["text"] ??
+                obj["point"] ??
+                obj["definition"] ??
+                obj["concept"] ??
+                obj["title"] ??
+                Object.values(obj).find((v) => typeof v === "string");
+              const extraText = obj["answer"] ?? obj["explanation"] ?? obj["description"];
+              if (typeof mainText === "string") {
+                return typeof extraText === "string" && extraText.trim()
+                  ? `${idx + 1}. ${mainText.trim()}\n${extraText.trim()}`
+                  : `${idx + 1}. ${mainText.trim()}`;
+              }
+            }
+            return "";
+          })
+          .filter(Boolean);
+        if (lines.length > 0) {
+          return lines.join("\n\n");
+        }
+      }
+    } catch {
+      // Fall through to text formatting
+    }
+  }
+
+  return trimmed
+    .replace(/([.?!:])\s+(\d+\.\s+[A-Z])/g, "$1\n\n$2")
+    .replace(/([.?!:])\s+([•\-*]\s+[A-Z])/g, "$1\n$2");
+}
+
 export function enrichHistoryItem(item: ApiHistoryItem): ApiHistoryItem {
   const p = item.payload ?? {};
-  const answer = typeof p["answer"] === "string" ? p["answer"] : undefined;
-  const summary = typeof p["summary"] === "string" ? p["summary"] : undefined;
-  const explanation = typeof p["explanation"] === "string" ? p["explanation"] : undefined;
+  const answer = typeof p["answer"] === "string" ? formatAiText(p["answer"]) : undefined;
+  const summary = typeof p["summary"] === "string" ? formatAiText(p["summary"]) : undefined;
+  const explanation = typeof p["explanation"] === "string" ? formatAiText(p["explanation"]) : undefined;
   const previewText = answer ?? summary ?? explanation ?? item.title;
   const score = typeof p["score"] === "number" ? p["score"] : item.score;
   const total = typeof p["total"] === "number" ? p["total"] : item.total;

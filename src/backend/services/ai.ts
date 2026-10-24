@@ -151,6 +151,63 @@ export const GeneratedQuizOutputSchema = z.object({
   questions: z.array(GeneratedQuizQuestionSchema).min(1).max(30),
 });
 
+export function normalizeAiAnswerText(rawAnswer: string): string {
+  const trimmed = rawAnswer.trim();
+  if (!trimmed) return trimmed;
+
+  // If the AI accidentally returned a stringified JSON array or object inside `answer`
+  // (e.g. `[{"question": "..."}, {"question": "..."}]`), convert it to clean numbered lines.
+  if (
+    (trimmed.startsWith("[") && trimmed.endsWith("]")) ||
+    (trimmed.startsWith("{") && trimmed.endsWith("}"))
+  ) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      const items = Array.isArray(parsed)
+        ? parsed
+        : parsed && typeof parsed === "object"
+          ? Object.values(parsed as Record<string, unknown>).find(Array.isArray) ?? [parsed]
+          : [];
+      if (Array.isArray(items) && items.length > 0) {
+        const lines = items
+          .map((item, idx) => {
+            if (typeof item === "string") return `${idx + 1}. ${item.trim()}`;
+            if (item && typeof item === "object") {
+              const obj = item as Record<string, unknown>;
+              const mainText =
+                obj["question"] ??
+                obj["text"] ??
+                obj["point"] ??
+                obj["definition"] ??
+                obj["concept"] ??
+                obj["title"] ??
+                Object.values(obj).find((v) => typeof v === "string");
+              const extraText = obj["answer"] ?? obj["explanation"] ?? obj["description"];
+              if (typeof mainText === "string") {
+                return typeof extraText === "string" && extraText.trim()
+                  ? `${idx + 1}. ${mainText.trim()}\n   ${extraText.trim()}`
+                  : `${idx + 1}. ${mainText.trim()}`;
+              }
+            }
+            return "";
+          })
+          .filter(Boolean);
+        if (lines.length > 0) {
+          return lines.join("\n\n");
+        }
+      }
+    } catch {
+      // Fall through to standard text formatting
+    }
+  }
+
+  return trimmed
+    // Ensure inline numbered items like "... . 2. Next item" start on a new line
+    .replace(/([.?!:])\s+(\d+\.\s+[A-Z])/g, "$1\n\n$2")
+    // Ensure inline bullet items start on a new line
+    .replace(/([.?!:])\s+([•\-*]\s+[A-Z])/g, "$1\n$2");
+}
+
 export class StudyAiService {
   private readonly client: AiModelClient;
 
@@ -174,6 +231,9 @@ export class StudyAiService {
     const systemInstruction = [
       "You are StudyMate AI, a precise academic study assistant.",
       "Answer the student's question STRICTLY using ONLY the supplied document pages below.",
+      "Format the 'answer' field as clean, easy-to-read plain text or markdown with clear line breaks ('\\n\\n').",
+      "NEVER return raw JSON arrays or JSON objects inside the 'answer' string.",
+      "When listing multiple questions, definitions, formulas, or key points, ALWAYS start each item on a new line with a blank line between items (e.g., '1. First question...\\n\\n2. Second question...\\n\\n3. Third question...').",
       "If the answer is not supported by the supplied document material, you MUST explicitly state that the answer is not supported by the provided material, set 'supported' to false, and return an empty 'sources' array.",
       "When the answer is supported by the text, set 'supported' to true and include page citations in 'sources' formatted like '<Document Title>, p. <PageNumber>'.",
     ].join(" ");
@@ -197,7 +257,11 @@ export class StudyAiService {
       },
     });
 
-    return parseAndValidateAiJson(raw, AiChatOutputSchema, "chat response");
+    const parsed = parseAndValidateAiJson(raw, AiChatOutputSchema, "chat response");
+    return {
+      ...parsed,
+      answer: normalizeAiAnswerText(parsed.answer),
+    };
   }
 
   async summarizeDocument(params: {
